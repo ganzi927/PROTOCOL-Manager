@@ -1,0 +1,11 @@
+{
+  // Local migration helper only. Use --local; not a deployment configuration.
+  "name": "protocol-manager-local-db",
+  "compatibility_date": "2026-09-09",
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "site-creator-d1",
+    "database_id": "00000000-0000-4000-8000-000000000000",
+    "migrations_dir": "./drizzle"
+  }]
+}

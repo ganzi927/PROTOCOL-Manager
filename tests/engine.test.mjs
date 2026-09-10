@@ -1,0 +1,21 @@
+import assert from 'node:assert/strict';
+import {newGame,applyCommand,simulateSet,ROLES,TEAM_META,roster,team,payroll,ovr,schedule,draftTurnTeam,legalDraftCandidates,DRAFT_ORDER,roleFit,champById} from '../lib/game.ts';
+const fi=schedule(TEAM_META.map(x=>x.id));assert.equal(fi.length,18);const meetings={};for(const round of fi){assert.equal(new Set(round.flat()).size,10);for(const pair of round){const k=[...pair].sort().join('-');meetings[k]=(meetings[k]??0)+1;}}assert.equal(Object.keys(meetings).length,45);assert.ok(Object.values(meetings).every(n=>n===2));
+let cases=0,sets=0;
+function next(g){if(g.phase==='PLAN'){g=applyCommand(g,{type:'training',payload:{id:'all',training:roster(g).some(p=>p.burn>45)?'rest':'scrim'}});return applyCommand(g,{type:'train'});}
+ if(g.phase==='PREP'){let s=applyCommand(g,{type:'startDraft'});let guard=0;
+  while(s.phase==='DRAFT'&&s.match.draftState&&!s.match.draftState.complete){assert.ok(guard++<12);const ds=s.match.draftState;assert.equal(draftTurnTeam(ds),s.teamId);const cands=legalDraftCandidates(s,ds);const kind=DRAFT_ORDER[ds.step][1];let champ=cands[0].id;if(kind==='PICK'){const mine=ds.blue===s.teamId?ds.picksBlue:ds.picksRed;const covered=new Set(mine.map(x=>x.role));const pref=cands.find(c=>!covered.has(c.role));if(pref)champ=pref.id;}s=applyCommand(s,{type:'draftPick',payload:{champ}});}
+  return s;}
+ if(g.phase==='DRAFT'){assert.ok(g.match.draftState?.complete);const d=g.match.draft;
+  assert.equal(new Set([...d.picksA,...d.picksB,...d.bans]).size,20);assert.equal(new Set(d.picksA).size,5);assert.equal(new Set(d.picksB).size,5);assert.equal(d.bans.length,10);
+  assert.equal(new Set(g.match.draftState.picksBlue.map(p=>p.role)).size,5);assert.equal(new Set(g.match.draftState.picksRed.map(p=>p.role)).size,5);
+  assert.ok([...d.picksA,...d.picksB].every((c,i)=>['primary','flex','off'].includes(roleFit(c,ROLES[i%5]))));
+  {const sw=applyCommand(g,{type:'draftSwap',payload:{from:0,to:1}});const mine0=g.teamId===g.match.a?d.picksA:d.picksB,mine1=g.teamId===sw.match.a?sw.match.draft.picksA:sw.match.draft.picksB;assert.equal(mine0[0],mine1[1]);assert.equal(mine0[1],mine1[0]);assert.equal(sw.phase,'DRAFT');}
+  const a=simulateSet(g,g.match),b=simulateSet(g,g.match);assert.deepEqual(a,b);assert.ok(a.events.length<=9);assert.ok([g.match.a,g.match.b].includes(a.winner));
+  assert.ok(a.events.every(e=>Number.isFinite(e.goldA)&&Number.isFinite(e.goldB)&&typeof e.detail==='string'&&e.detail.length>0));
+  sets++;return applyCommand(g,{type:'play'});}
+ if(g.phase==='RECAP')return applyCommand(g,{type:'continue'});if(g.phase==='MATCH_END')return applyCommand(g,{type:'advance'});if(g.phase==='SPLIT_END'){assert.equal(g.po.length,8);return applyCommand(g,{type:'nextSplit'});}if(g.phase==='WORLD_END'){const cup=g.international;assert.ok(cup.champion);if(cup.kind==='WORLD'){assert.equal(cup.table.filter(r=>r.wins===3).length,8);assert.ok(cup.table.every(r=>r.wins===3||r.losses===3));assert.equal(new Set(cup.participants).size,16);assert.ok(cup.matches.length>=35);}return applyCommand(g,{type:'nextCompetition'});}if(g.phase==='OFFSEASON'){for(const r of ROLES){let p=roster(g).filter(p=>p.role===r).sort((a,b)=>ovr(b)-ovr(a))[0];if(!p){const fa=g.players.filter(p=>!p.teamId&&p.role===r&&p.releasedSeason!==g.season).sort((a,b)=>a.salary-b.salary)[0];assert.ok(fa);g=applyCommand(g,{type:'sign',payload:{id:fa.id,years:1}});p=fa;}g=applyCommand(g,{type:'lineup',payload:{id:p.id}});}return applyCommand(g,{type:'newSeason'});}throw Error(g.phase);}
+const mSum=p=>p.mastery.reduce((a,m)=>a+m.level*100+m.xp,0);
+for(const tid of ['nva','crn','rse']){let g=newGame(tid,42);assert.ok(payroll(g)<=250000);const hero=g.players.find(p=>p.teamId===tid),h0=mSum(hero);let commands=0;while(g.season<5){g=next(g);commands++;assert.ok(commands<5000);for(const t of g.teams){assert.ok(Number.isFinite(t.cash));assert.ok(t.wins>=0);}for(const p of g.players)for(const m of p.mastery){assert.ok(m.level>=0&&m.level<=4);assert.ok(m.xp>=0&&m.xp<100);}}
+ assert.equal(g.hall.length,16);const heroNow=g.players.find(p=>p.id===hero.id);if(heroNow)assert.ok(mSum(heroNow)>h0,tid+' hero mastery grew');console.log(tid,commands,'commands, 4 seasons complete');cases++;}
+console.log('PASS',cases,'careers;',sets,'deterministic user sets; schedule/draft/season invariants');

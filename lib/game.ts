@@ -1,0 +1,402 @@
+import {CHAMPIONS, TAG_LABEL, champImageUrl, type Champion, type ChampTag, type ChampType} from './champions.ts';
+import {TEAM_META, FOREIGN_META, TEAM_LOGO, LCK_ROSTER, INTL_ROSTER} from './rosters.ts';
+import {draftEffects} from './balance/composition.ts';
+import {narrateEvent, newNarrMemory, type Beat, type Tier} from './simulation/narration.ts';
+import {newMatchState, resolveGank, resolveBotLane, resolveObjective, resolveTeamfight, type CombatEvent} from './simulation/combat.ts';
+export {CHAMPIONS, TAG_LABEL, champImageUrl, TEAM_META, FOREIGN_META, TEAM_LOGO};
+export type {Champion, ChampTag, ChampType};
+export const ROLES = ['TOP','JGL','MID','ADC','SUP'] as const;
+export type Role = typeof ROLES[number];
+export const STAT_KEYS = ['LNE','TF','OBJ','VIS','MEC','CAR'] as const;
+export const STAT_NAMES = ['라인전','한타','오브젝트','시야','메커닉','캐리'];
+export const TACTICS = [
+ {id:'balanced',name:'균형 운영',desc:'모든 구간에 고르게 힘을 배분합니다.',bonus:[0,0,0]},
+ {id:'early',name:'초반 압박',desc:'라인 +3 · 오브젝트 +1 · 한타 −3',bonus:[3,1,-3]},
+ {id:'objective',name:'오브젝트 운영',desc:'라인 −1 · 오브젝트 +3 · 한타 −1',bonus:[-1,3,-1]},
+ {id:'late',name:'후반 집중',desc:'라인 −3 · 오브젝트 −1 · 한타 +3',bonus:[-3,-1,3]},
+];
+export const TRAININGS = [
+ {id:'practice',name:'개인 연습',desc:'라인전·메커닉 성장',burn:5},
+ {id:'scrim',name:'팀 스크림',desc:'한타·운영 성장, 호흡 +4',burn:4},
+ {id:'analysis',name:'전략 분석',desc:'다음 매치 밴픽 판단 개선',burn:2},
+ {id:'champ',name:'챔피언 특훈',desc:'지정 챔피언 숙련 경험치 상승',burn:4},
+ {id:'rest',name:'휴식',desc:'번아웃 −16 · 폼 +3',burn:-16},
+];
+export const STAFF = [{id:'coach',name:'육성 코치',description:'선수 성장량 +10% / +20% / +30%'},{id:'analyst',name:'전력 분석가',description:'자동 밴픽 판단 오차 50% / 75% / 87.5% 감소'},{id:'psych',name:'심리 코치',description:'휴식 번아웃 회복 +3 / +6 / +9'}];
+export const STAFF_COST=[0,15000,30000,50000];
+export const domestic=(t:{id:string})=>TEAM_META.some(m=>m.id===t.id);
+export type International={kind:'MIDSEASON'|'WORLD',stage:'SWISS'|'BRACKET'|'DONE',round:number,participants:string[],table:{id:string,wins:number,losses:number,opponents:string[]}[],queue:Match[],matches:Match[],bracket:string[],champion?:string};
+export type Mastery={champ:string,level:number,xp:number};
+export const MASTERY_CAP=4,MASTERY_XP=100,MASTERY_POOL=8;
+export type Player={id:string,name:string,realName:string,role:Role,teamId:string|null,age:number,stats:number[],pot:number[],form:number,burn:number,salary:number,until:number,training:string,trainChamp?:string,mastery:Mastery[],pog:number,growth:number,nextSalary?:number,nextUntil?:number,releasedSeason?:number};
+export type Team={id:string,lineup:Record<Role,string>,familiarity:Record<string,number>,cash:number,fan:number,expected:number,tactic:string,focus:string,wins:number,losses:number,sw:number,sl:number,points:number,staff?:Record<string,number>};
+export type Draft={picksA:string[],picksB:string[],bans:string[],actions:{team:string,kind:string,champ:string}[]};
+export type DraftPick={champ:string,role:Role};
+export type DraftState={blue:string,red:string,step:number,bans:{side:'B'|'R',champ:string}[],picksBlue:DraftPick[],picksRed:DraftPick[],actions:{team:string,kind:string,champ:string}[],complete:boolean};
+export type GameEvent={index:number,phase:string,title:string,winner:string,edge?:string,prob:number,advantage:number,powerA:number,powerB:number,goldA:number,goldB:number,detail:string,leadA?:number,resPowA?:number,compA?:number,beats?:Beat[],tier?:Tier,kills?:{a:number,b:number},combat?:CombatEvent};
+export type SetResult={winner:string,events:GameEvent[],draft:Draft,recap:string[],pog:string,powersA:number[],powersB:number[],lineupA:string[],lineupB:string[],leadA?:number[],draftFx?:{lane:number,obj:number,fight:number}};
+export type Match={id:string,a:string,b:string,bestOf:number,scoreA:number,scoreB:number,sets:SetResult[],winner?:string,draft?:Draft,draftState?:DraftState,label:string};
+export type RecordMatch={id:string,a:string,b:string,sa:number,sb:number,winner:string,label:string,season:number};
+export type Game={version:number,seed:number,season:number,split:'SPRING'|'SUMMER',round:number,stage:'REGULAR'|'PLAYOFF'|'INTERNATIONAL',phase:'PLAN'|'PREP'|'DRAFT'|'RECAP'|'MATCH_END'|'SPLIT_END'|'OFFSEASON'|'WORLD_END',teamId:string,players:Player[],teams:Team[],fixtures:string[][][],match:Match|null,history:RecordMatch[],news:string[],hall:{season:number,split:string,champion:string,rank:number}[],po:Match[],poSeeds:string[],champion:string|null,trained:boolean,offWeek:number,ledger:{label:string,amount:number}[],planNotice:string[],meta:string[],international?:International,settledWeeks?:number,sandbox?:boolean};
+export type Command={type:string,payload?:Record<string,unknown>};
+export const clamp=(v:number,a=0,b=100)=>Math.min(b,Math.max(a,v));
+export const avg=(ns:number[])=>ns.reduce((a,b)=>a+b,0)/(ns.length||1);
+export const ovr=(p:Player)=>Math.round(avg(p.stats));
+export const money=(v:number)=>(v/10000).toFixed(2)+'억';
+export const meta=(id:string)=>[...TEAM_META,...FOREIGN_META].find(t=>t.id===id)!;
+export function random(seed:number){let a=seed>>>0;return()=>{a+=0x6D2B79F5;let t=a;t=Math.imul(t^t>>>15,t|1);t^=t+Math.imul(t^t>>>7,t|61);return((t^t>>>14)>>>0)/4294967296;};}
+export function hash(s:string){let h=2166136261;for(let i=0;i<s.length;i++)h=Math.imul(h^s.charCodeAt(i),16777619);return h>>>0;}
+const FALLBACK_CHAMP:Champion={id:'?',name:'미상',role:'MID',type:'혼합',tags:[],flex:[]};
+export const champById=(id:string):Champion=>CHAMPIONS.find(c=>c.id===id)??{...FALLBACK_CHAMP,id,name:id};
+export const champName=(id:string):string=>champById(id).name;
+export const masteryLevel=(p:Player,champId:string):number=>p.mastery?.find(m=>m.champ===champId)?.level??0;
+// 한국어 조사 헬퍼는 중계로 이동했다 → lib/simulation/narration.ts
+export const isMeta=(g:Game,champId:string):boolean=>!!g.meta?.includes(champId);
+export function metaChampions(seed:number,season:number):string[]{
+ const rng=random(hash(`${seed}|meta|${season}`));
+ return ROLES.flatMap(role=>{
+  const pool=CHAMPIONS.filter(c=>c.role===role).map(c=>({id:c.id,v:rng()})).sort((a,b)=>a.v-b.v);
+  return pool.slice(0,2+(rng()<.5?1:0)).map(x=>x.id);
+ });
+}
+// Starting tiers scale with player skill; nobody starts at MASTERY_CAP — Lv4 is earned
+// only through match play and 챔피언 특훈 training.
+function makeMastery(role:Role,seedId:string,base=64):Mastery[]{
+ const rng=random(hash(seedId+'|mastery'));
+ const pool=CHAMPIONS.filter(c=>c.role===role).map(c=>({id:c.id,v:rng()})).sort((a,b)=>a.v-b.v);
+ const tier=base>=80?[3,3,2,2,1]:base>=70?[3,2,2,1,1]:base>=60?[2,2,1,1,1]:[2,1,1,1];
+ return tier.map((level,i)=>({champ:pool[i%pool.length].id,level,xp:0}));
+}
+export function gainMastery(p:Player,champId:string,amount:number){
+ if(!champId||amount<=0||!Array.isArray(p.mastery))return;
+ let m=p.mastery.find(x=>x.champ===champId);
+ if(!m){if(p.mastery.length>=MASTERY_POOL)return;m={champ:champId,level:0,xp:0};p.mastery.push(m);}
+ if(m.level>=MASTERY_CAP){m.xp=0;return;}
+ m.xp+=amount;
+ while(m.xp>=MASTERY_XP&&m.level<MASTERY_CAP){m.xp-=MASTERY_XP;m.level++;}
+ if(m.level>=MASTERY_CAP)m.xp=0;
+}
+const handles=['Orbit','Kite','Lucid','Aero','Mellow','Rook','Cloud','Zenith','Karma','Prism','Vega','Hush','Nero','Flux','Arden','Rift','Sable','Comet','Lyra','Vale','Frost','Dusk','Raven','Muse','Ash','Pulse','Rune','Atlas','Solar','Echo','Wave','Fable','Crest','Sonic','Bloom','Rain','Void','Iris','Blitz','Halo','Glide','Quill','Ember','Crux','Dawn','Myth','Scope','Tide','Nova','Wisp','Slate','Bolt','Arc','Onyx','Fawn','Cyan','Wolf','Peak','Lyric','Fate','Dune','Cove','Fern','Wren','Spark','Rex','Lynx','Nox','Zeal','Vow'];
+function makePlayer(n:number,role:Role,teamId:string|null,base:number,season:number,rng:()=>number):Player{
+ const r=ROLES.indexOf(role);const shapes=[[10,-4,0,-4,2,-4],[0,-2,10,-4,4,-8],[8,-4,-2,-4,4,-2],[-4,12,0,-6,4,-6],[-4,4,4,10,-6,-8]];
+ const stats=shapes[r].map(d=>Math.round(clamp(base+d+(rng()-.5)*6,15,96)*100)/100);
+ const id=`p${season}-${n}`;
+ return {id,name:handles[n%handles.length]+(n>=70?String(season)+String(n-69):''),realName:['김','이','박','정','장'][n%5]+['도윤','시우','지호','민준','현우','서준','우진'][n%7],role,teamId,age:18+Math.floor(rng()*10),stats,pot:stats.map(s=>clamp(s+8+rng()*12,1,99)),form:50,burn:0,salary:Math.round(20000*(avg(stats)/50)**2),until:season+1,training:'scrim',mastery:makeMastery(role,id,base),pog:0,growth:0};
+}
+export function schedule(ids:string[]){const order=[...ids],a:string[][][]=[];for(let r=0;r<9;r++){a.push(Array.from({length:5},(_,i)=>r%2?[order[9-i],order[i]]:[order[i],order[9-i]]));order.splice(1,0,order.pop()!);}return [...a,...a.map(row=>row.map(([x,y])=>[y,x]))];}
+export const team=(g:Game,id=g.teamId)=>g.teams.find(t=>t.id===id)!;
+export const roster=(g:Game,id=g.teamId)=>g.players.filter(p=>p.teamId===id&&!p.id.startsWith('emergency'));
+export const starters=(g:Game,id=g.teamId)=>ROLES.map(r=>g.players.find(p=>p.id===team(g,id).lineup[r]&&p.teamId===id)!).filter(Boolean);
+const key=(t:Team)=>ROLES.map(r=>t.lineup[r]).join('|');
+export const synergy=(g:Game,id=g.teamId)=>team(g,id).familiarity[key(team(g,id))]??20;
+export const payroll=(g:Game,id=g.teamId)=>roster(g,id).reduce((a,p)=>a+p.salary,0);
+export function standings(g:Game){return [...g.teams].filter(domestic).sort((a,b)=>b.wins-a.wins||(b.sw-b.sl)-(a.sw-a.sl)||head(a.id,b.id)||hash(g.seed+a.id)-hash(g.seed+b.id));function head(a:string,b:string){return g.history.filter(m=>m.season===g.season&&m.label.startsWith(g.split+' R')&&((m.a===a&&m.b===b)||(m.a===b&&m.b===a))).reduce((v,m)=>v+(m.winner===a?-1:1),0);}}
+export function newGame(teamId:string,seed:number):Game{
+ if(!TEAM_META.some(t=>t.id===teamId))throw Error('팀을 선택해 주세요.');
+ const rng=random(seed),players:Player[]=[],teams:Team[]=[];
+ TEAM_META.forEach((m,i)=>{const lineup={} as Record<Role,string>;for(let j=0;j<7;j++){const p=makePlayer(i*7+j,ROLES[j%5],m.id,m.base-(j>=5?17:0),1,rng);const rl=j<5?LCK_ROSTER[m.id]?.[j]:undefined;if(rl){p.name=rl[0];p.realName=rl[1];}players.push(p);if(j<5)lineup[p.role]=p.id;}const total=players.filter(p=>p.teamId===m.id).reduce((s,p)=>s+p.salary,0);if(total>240000)players.filter(p=>p.teamId===m.id).forEach(p=>p.salary=Math.floor(p.salary*240000/total));const t:Team={id:m.id,lineup,familiarity:{},cash:100000,fan:50,expected:1,tactic:i%3===0?'early':i%3===1?'late':'objective',focus:'MID',wins:0,losses:0,sw:0,sl:0,points:0};t.familiarity[key(t)]=40;teams.push(t);});
+ const ranked=[...TEAM_META].sort((a,b)=>b.base-a.base);teams.forEach(t=>t.expected=ranked.findIndex(m=>m.id===t.id)+1);
+ for(let i=0;i<15;i++)players.push(makePlayer(70+i,ROLES[i%5],null,48+rng()*18,1,rng));
+ return {version:1,seed,season:1,split:'SPRING',round:0,stage:'REGULAR',phase:'PLAN',teamId,players,teams,fixtures:schedule(teams.filter(domestic).map(t=>t.id)),match:null,history:[],news:['감독으로 부임했습니다. 이번 시즌의 첫 주간 훈련을 선택하세요.','Classic 리그: 정규시즌 18경기 · Bo3 · 상위 6팀 플레이오프'],hall:[],po:[],poSeeds:[],champion:null,trained:false,offWeek:0,ledger:[],planNotice:[],meta:metaChampions(seed,1)};
+}
+function news(g:Game,s:string){g.news.unshift(s);g.news=g.news.slice(0,30);}
+function pay(g:Game,t:Team,v:number,label:string){t.cash+=v;if(t.id===g.teamId){g.ledger.unshift({label,amount:v});g.ledger=g.ledger.slice(0,30);}}
+function ensureLineup(g:Game,id:string){const t=team(g,id);for(const r of ROLES){const current=g.players.find(p=>p.id===t.lineup[r]&&p.teamId===id);if(!current||current.burn>=90){const options=roster(g,id).filter(p=>p.role===r&&p.burn<90).sort((a,b)=>ovr(b)-ovr(a));if(options.length)t.lineup[r]=options[0].id;else{let p=g.players.find(p=>p.id===`emergency-${id}-${r}`);if(!p){p=makePlayer(99,r,id,35,g.season,random(hash(id+r)));p.id=`emergency-${id}-${r}`;p.name='긴급 '+r;p.salary=0;g.players.push(p);}p.burn=0;t.lineup[r]=p.id;pay(g,t,-200,'긴급 선수 수당');if(id===g.teamId)news(g,`${r} 출전 선수가 없어 긴급 선수를 호출했습니다. (0.02억)`);}}}}
+function train(g:Game){g.planNotice=[];for(const t of g.teams){for(const p of roster(g,t.id)){if(p.id.startsWith('emergency'))continue;if(t.id!==g.teamId)p.training=p.burn>45?'rest':synergy(g,t.id)<70?'scrim':'practice';const tr=TRAININGS.find(x=>x.id===p.training)!;p.burn=clamp(p.burn+tr.burn-(tr.id==='rest'?(t.staff?.psych??0)*3:0));p.form=clamp(50+.85*(p.form-50)+(tr.id==='rest'?3:0));p.growth=0;const idx=tr.id==='practice'?[0,4]:tr.id==='scrim'?[1,2,3]:[];for(const s of idx){const d=Math.max(0,Math.min(p.pot[s]-p.stats[s],1.5*(1+(t.staff?.coach??0)*.1)/idx.length*Math.pow(Math.max(0,1-p.stats[s]/p.pot[s]),1.2)));p.stats[s]=Math.round((p.stats[s]+d)*100)/100;p.growth+=d;}
+ if(tr.id==='champ'){
+  // 사용자가 고른 목표를 그대로 훈련한다. 미등록 챔피언은 풀에 자리가 있으면 새로 등록하고,
+  // 풀(8칸)이 가득 차면 다른 챔피언으로 조용히 대체하지 않고 보류를 알린다.
+  const wanted=p.trainChamp&&CHAMPIONS.some(c=>c.id===p.trainChamp)?p.trainChamp:undefined;
+  if(wanted&&!p.mastery.some(m=>m.champ===wanted)&&p.mastery.length>=MASTERY_POOL){
+   if(t.id===g.teamId)g.planNotice.push(`${p.name} · 챔피언 특훈 보류 · 숙련 챔피언 ${MASTERY_POOL}칸이 가득 차 ${champName(wanted)}을(를) 등록하지 못했습니다 · 번아웃 ${Math.round(p.burn)}`);
+  }else{
+   const target=wanted??[...p.mastery].sort((a,b)=>(a.level-b.level)||(a.xp-b.xp))[0]?.champ;
+   if(target){const gain=Math.round(28*(1+(t.staff?.coach??0)*.1));gainMastery(p,target,gain);if(t.id===g.teamId)g.planNotice.push(`${p.name} · 챔피언 특훈 · ${champName(target)} 숙련 +${gain} · 번아웃 ${Math.round(p.burn)}`);}
+  }
+ }
+ else if(t.id===g.teamId)g.planNotice.push(`${p.name} · ${tr.name} · ${idx.length?'성장 +'+p.growth.toFixed(2):'폼 '+Math.round(p.form)} · 번아웃 ${Math.round(p.burn)}`);}
+ const k=key(t);for(const x in t.familiarity)t.familiarity[x]=clamp(t.familiarity[x]-1,20,100);t.familiarity[k]=clamp((t.familiarity[k]??20)+(starters(g,t.id).filter(p=>p.training==='scrim').length>=3?4:0),20,100);ensureLineup(g,t.id);}
+ g.trained=true;g.phase='PREP';loadMatch(g);news(g,`${g.split==='SPRING'?'스프링':'서머'} ${Math.floor(g.round/2)+1}주차 훈련 완료`);}
+export function upcoming(g:Game){return g.match??(g.stage==='REGULAR'&&g.fixtures[g.round]?(()=>{const [a,b]=g.fixtures[g.round].find(p=>p.includes(g.teamId))!;return {id:`${g.season}-${g.split}-${g.round}-${a}`,a,b,bestOf:3,scoreA:0,scoreB:0,sets:[],label:`${g.split} R${g.round+1}`} as Match;})():null);}
+function loadMatch(g:Game){const m=upcoming(g);if(m){g.match=m;ensureLineup(g,m.a);ensureLineup(g,m.b);g.phase='PREP';}}
+// Standard competitive tournament draft: ban×6 / pick×6 / ban×4 / pick×4 (each side 5 bans, 5 picks).
+export const DRAFT_ORDER:['B'|'R','BAN'|'PICK'][]=[['B','BAN'],['R','BAN'],['B','BAN'],['R','BAN'],['B','BAN'],['R','BAN'],['B','PICK'],['R','PICK'],['R','PICK'],['B','PICK'],['B','PICK'],['R','PICK'],['R','BAN'],['B','BAN'],['R','BAN'],['B','BAN'],['R','PICK'],['B','PICK'],['B','PICK'],['R','PICK']];
+const draftSideTeam=(ds:DraftState,step:number)=>DRAFT_ORDER[step][0]==='B'?ds.blue:ds.red;
+const draftUsed=(ds:DraftState)=>new Set<string>([...ds.bans.map(b=>b.champ),...ds.picksBlue.map(p=>p.champ),...ds.picksRed.map(p=>p.champ)]);
+const draftPicksOf=(ds:DraftState,teamId:string)=>teamId===ds.blue?ds.picksBlue:ds.picksRed;
+export const draftTurnTeam=(ds:DraftState)=>ds.step<DRAFT_ORDER.length?draftSideTeam(ds,ds.step):'';
+export function newDraftState(g:Game,m:Match):DraftState{
+ const first=m.sets.length?m.sets[m.sets.length-1].winner!==m.a:true;
+ return {blue:first?m.a:m.b,red:first?m.b:m.a,step:0,bans:[],picksBlue:[],picksRed:[],actions:[],complete:false};
+}
+// A champion may be picked into any lane. Its natural line = 'primary', a listed
+// secondary line = 'flex' (no penalty), anything else = 'off' (stat penalty).
+export const roleFit=(champId:string,role:Role):'primary'|'flex'|'off'=>{const c=champById(champId);return c.role===role?'primary':c.flex.includes(role)?'flex':'off';};
+const OFFROLE_PEN=6;
+const assignCost=(champId:string,role:Role)=>{const f=roleFit(champId,role);return f==='primary'?0:f==='flex'?1:5;};
+const ROLE_PERMS:Role[][]=(()=>{const out:Role[][]=[];const rec=(rem:Role[],acc:Role[])=>{if(!rem.length){out.push(acc);return;}for(let i=0;i<rem.length;i++)rec([...rem.slice(0,i),...rem.slice(i+1)],[...acc,rem[i]]);};rec([...ROLES],[]);return out;})();
+// Best-fit assignment of 5 picked champions to the 5 lane slots (minimises off-role cost).
+function autoAssign(picks:DraftPick[]){
+ if(picks.length!==5)return;
+ let best=ROLE_PERMS[0],bestC=Infinity;
+ for(const perm of ROLE_PERMS){let c=0;for(let i=0;i<5;i++)c+=assignCost(picks[i].champ,perm[i]);if(c<bestC){bestC=c;best=perm;}}
+ picks.forEach((p,i)=>p.role=best[i]);
+}
+export function legalDraftCandidates(g:Game,ds:DraftState):Champion[]{
+ if(ds.step>=DRAFT_ORDER.length)return [];
+ const [,kind]=DRAFT_ORDER[ds.step];const used=draftUsed(ds);
+ const cands=CHAMPIONS.filter(c=>!used.has(c.id));
+ if(kind==='PICK')return cands; // any champion, any order — off-role is allowed with a penalty
+ const remain:Record<string,number>={};for(const c of cands)remain[c.role]=(remain[c.role]??0)+1;
+ return cands.filter(c=>remain[c.role]>2); // don't ban a lane out of viable champions
+}
+function aiPick(g:Game,m:Match,ds:DraftState):string{
+ const [side,kind]=DRAFT_ORDER[ds.step];const teamId=side==='B'?ds.blue:ds.red,oppId=teamId===ds.blue?ds.red:ds.blue;
+ const cands=legalDraftCandidates(g,ds);
+ if(!cands.length)throw Error('드래프트 후보가 부족합니다.');
+ const rng=random(hash(`${g.seed}|draft|${m.id}|${m.sets.length}|${ds.step}`));
+ const t=team(g,teamId),mine=starters(g,teamId),opp=starters(g,oppId);
+ const metaSet=new Set(g.meta),analyst=t.staff?.analyst??0,noise=(mine.some(p=>p.training==='analysis')?.5:1)*(.5**analyst);
+ const rate=(ps:Player[],champ:string)=>{let m=0;for(const p of ps)m=Math.max(m,masteryLevel(p,champ));return m;};
+ const cov:Record<string,number>={};for(const p of draftPicksOf(ds,teamId))cov[champById(p.champ).role]=(cov[champById(p.champ).role]??0)+1;
+ const open=ROLES.filter(r=>!cov[r]);
+ let best='',bestScore=-Infinity;
+ for(const c of cands){
+  const meta=metaSet.has(c.id)?3:0;let s:number;
+  if(kind==='BAN')s=rate(opp,c.id)*2+meta;
+  else{
+   const fitRole=open.includes(c.role)?c.role:c.flex.find(f=>open.includes(f))??open[0]??c.role;
+   const fit=!open.length?0:open.includes(c.role)?4:c.flex.some(f=>open.includes(f))?1.5:-5;
+   const player=mine[ROLES.indexOf(fitRole)];
+   s=fit+(player?masteryLevel(player,c.id)*2:0)+(t.tactic==='early'&&c.tags.includes('engage')?2:t.tactic==='late'&&c.tags.includes('scale')?2:0)+meta;
+  }
+  s+=rng()*noise;
+  if(s>bestScore){bestScore=s;best=c.id;}
+ }
+ return best;
+}
+function applyDraftStep(ds:DraftState,champId:string){
+ const [side,kind]=DRAFT_ORDER[ds.step];const teamId=side==='B'?ds.blue:ds.red;
+ if(kind==='BAN')ds.bans.push({side,champ:champId});
+ else draftPicksOf(ds,teamId).push({champ:champId,role:champById(champId).role});
+ ds.actions.push({team:teamId,kind,champ:champId});ds.step++;
+}
+function draftToResult(m:Match,ds:DraftState):Draft{
+ const picksFor=(teamId:string)=>{const ps=teamId===ds.blue?ds.picksBlue:ds.picksRed;return ROLES.map(r=>(ps.find(p=>p.role===r)??ps[0]).champ);};
+ return {picksA:picksFor(m.a),picksB:picksFor(m.b),bans:ds.bans.map(b=>b.champ),actions:ds.actions};
+}
+function finalizeDraft(m:Match,ds:DraftState){autoAssign(ds.picksBlue);autoAssign(ds.picksRed);m.draft=draftToResult(m,ds);ds.complete=true;}
+function advanceDraft(g:Game,m:Match,ds:DraftState){
+ while(ds.step<DRAFT_ORDER.length&&draftSideTeam(ds,ds.step)!==g.teamId)applyDraftStep(ds,aiPick(g,m,ds));
+ if(ds.step>=DRAFT_ORDER.length)finalizeDraft(m,ds);
+}
+function pickDraft(g:Game,m:Match):Draft{
+ const ds=newDraftState(g,m);
+ while(ds.step<DRAFT_ORDER.length)applyDraftStep(ds,aiPick(g,m,ds));
+ autoAssign(ds.picksBlue);autoAssign(ds.picksRed);
+ return draftToResult(m,ds); // does NOT set m.draft — each auto-match set re-drafts
+}
+function powers(g:Game,id:string,picks:string[],rng:()=>number){const ps=starters(g,id);const values=ps.map((p,i)=>{const targets=[[0,4],[2,3],[0,5],[1,4],[1,3]][i],condition=Math.floor(rng()*7)-3;const pickBonus=masteryLevel(p,picks[i])*2+(isMeta(g,picks[i])?2:0);const offRole=roleFit(picks[i],ROLES[i])==='off'?OFFROLE_PEN:0;return p.stats.map((s,k)=>clamp(s+condition-offRole+(targets.includes(k)?pickBonus:0),1,105));});
+ const q=values.map(s=>.5*s[0]+.3*s[4]+.2*s[5]),j=.6*values[1][2]+.4*values[1][4];const lanes=[q[0],q[2],.65*q[3]+.35*q[4]].map((v,i)=>.9*v+.1*j+(['TOP','MID','BOT'][i]===team(g,id).focus?2:-1));
+ const obj=values.reduce((v,s,i)=>v+(.45*s[2]+.3*s[3]+.25*s[4])*[.1,.35,.2,.1,.25][i],0);
+ const fight=.8*values.reduce((v,s,i)=>v+(.5*s[1]+.3125*s[5]+.1875*s[4])*[.15,.15,.2,.3,.2][i],0)+.2*synergy(g,id);
+ // 조합 효과는 powers()에서 분리했다 — simulateSet이 draftEffects()로 라인/오브젝트/한타에 1회만 반영(단일 경로, 이중 보정 방지).
+ const bonus=TACTICS.find(t=>t.id===team(g,id).tactic)!.bonus,form=1+(avg(ps.map(p=>p.form))-50)/500;
+ return [...lanes.map(x=>x*form+bonus[0]),obj*form+bonus[1],fight*form-avg(ps.map(p=>p.burn))/10+bonus[2]];}
+// 중계는 lib/simulation/narration.ts의 narrateEvent가 담당한다. simulateSet이 사건별로 해결된
+// 컨텍스트(해결된 이름·자원·조합·전술)를 넘기고, 전용 narr 난수(승부/골드 난수와 분리)로 텍스트만 만든다.
+
+// 개인 자원 모델: 라인·시야 우위를 선수별 자원 우위(A 관점 골드 단위)로 남기고, 그 자원을
+// 이후 오브젝트/한타의 유효 전력에 반영한다. 승부 난수(outcome) 스트림 호출 순서·횟수는 바꾸지 않는다.
+const RES_ADV_K=0.32;         // 누적 우위 계수(기존 0.35에서 축소 — 자원 보정과 이중 보상 방지)
+// 라인 자원은 lib/simulation/combat.ts가 참여자 기반으로 산출한다(RES_LANE_LEAD·RES_BOT·RES_JGL_CARRY 폐지).
+const RES_VIS_W=[1,1.35,1,1,1.5];       // 시야 가중(정글·서포터 우대)
+const RES_VIS_PROTECT=2.6;    // 가중 시야 우위 1점당 슬롯별 자원 보호치(피습·불리한 진입 감소)
+const RES_CAR_W=[0.12,0.1,0.32,0.36,0.1]; // 자원→피해 전환 주체(미드·원딜 중심)
+const RES_DEAD=42,RES_CAP=165,RES_SCALE=150,RES_OBJ=3.0,RES_FIGHT=4.6; // 자원→유효 전력 포화 곡선(데드존·총량 상한·스케일·오브젝트/한타 상한)
+export function simulateSet(g:Game,m:Match):SetResult{
+ const draft=m.draft??pickDraft(g,m),rng=random(hash(`${g.seed}|outcome|${m.id}|${m.sets.length}`));
+ const de=draftEffects(draft.picksA,draft.picksB); // 조합 효과(A 관점, 결정적). 라인/오브젝트/한타에 각각 1회 가산.
+ const flavor=random(hash(`${g.seed}|flavor|${m.id}|${m.sets.length}`));let gA=2500,gB=2500;
+ const narr=random(hash(`${g.seed}|narr|${m.id}|${m.sets.length}`)),mem=newNarrMemory(); // 중계 전용 난수(승부/골드와 분리)
+ const pa=powers(g,m.a,draft.picksA,random(hash(`${g.seed}|conditionA|${m.id}|${m.sets.length}`))),pb=powers(g,m.b,draft.picksB,random(hash(`${g.seed}|conditionB|${m.id}|${m.sets.length}`)));
+ const sa=starters(g,m.a),sb=starters(g,m.b);
+ const nAChamp=draft.picksA.map(champName),nBChamp=draft.picksB.map(champName);
+ const nAPlayer=sa.map(p=>p.name),nBPlayer=sb.map(p=>p.name);
+ const nUserIsA=m.a===g.teamId?true:m.b===g.teamId?false:null;
+ const nUserTactic=nUserIsA===null?null:team(g).tactic,nUserFocus=nUserIsA===null?null:team(g).focus;
+ const crng=random(hash(`${g.seed}|combat|${m.id}|${m.sets.length}`)); // 전투 전용 난수(승부/골드/중계와 분리)
+ const cs=newMatchState(
+  sa.map(p=>({stats:p.stats,name:p.name,role:p.role})),sb.map(p=>({stats:p.stats,name:p.name,role:p.role})),
+  draft.picksA,draft.picksB,
+  (side,slot)=>masteryLevel(side==='A'?sa[slot]:sb[slot],(side==='A'?draft.picksA:draft.picksB)[slot]),
+  (side,slot)=>roleFit((side==='A'?draft.picksA:draft.picksB)[slot],ROLES[slot])==='off',
+ );
+ const wVis=(ps:Player[])=>ps.reduce((v,p,k)=>v+p.stats[3]*RES_VIS_W[k],0)/RES_VIS_W.reduce((x,y)=>x+y,0);
+ const wCar=(ps:Player[])=>ps.reduce((v,p,k)=>v+p.stats[5]*RES_CAR_W[k],0);
+ const convA=1+clamp((wCar(sa)-50)/130,-0.3,0.5),convB=1+clamp((wCar(sb)-50)/130,-0.3,0.5);
+ const visEdge=wVis(sa)-wVis(sb);
+ const lead=[0,0,0,0,0]; // 슬롯별 자원(+ = A 우세)
+ let advantage=0,pressureA=0,pressureB=0,winner='',laneResults:number[]=[];const events:GameEvent[]=[];
+ const labels=['탑 라인전','미드 라인전','바텀 라인전','전령 교전','드래곤 교전','중반 교전','후반 교전','마지막 진격','기지 결전'];
+ for(let i=0;i<9;i++){const phase=i<3?i:i<5?3:4;const access=i===3?avg(laneResults.slice(0,2))*.5:i===4?avg(laneResults.slice(1))*.5:0;
+ const teamLead=lead[0]+lead[1]+lead[2]+lead[3]+lead[4];
+ const effLead=clamp(Math.sign(teamLead)*Math.max(0,Math.abs(teamLead)-RES_DEAD),-RES_CAP,RES_CAP);
+ const resPow=i<3?0:(i<5?RES_OBJ:RES_FIGHT)*Math.tanh(effLead/RES_SCALE)*(teamLead>=0?convA:convB);
+ const comp=i<3?de.lane:i<5?de.obj:de.fight;
+ const p=clamp(1/(1+10**(-(pa[phase]-pb[phase]+RES_ADV_K*advantage+access+resPow+comp)/30)),.05,.95);
+ const edgeA=rng()<p;                     // 이 구간의 '전술적 우위' 롤. 라인·한타는 확정 승자, 오브전은 '유리한 시작'.
+ const margin=clamp(Math.abs(p-0.5)*2.2,0,1),delta=i<3?1:i<6?2:3;
+ let combatEvt:CombatEvent|undefined,wa=edgeA; // wa = 자원·advantage·winner에 쓰는 '확정' 방향
+ if(i<3){ // 라인 단계: 참여자 기반 전투로 자원 산출 (탑·미드 = 2대1 갱킹, 바텀 = 2v2+정글)
+  combatEvt=i<2
+   ? resolveGank(cs,i,i as 0|1,edgeA,margin,[150,306][i],crng)
+   : resolveBotLane(cs,i,edgeA,margin,498,crng);
+  for(let s=0;s<5;s++)lead[s]+=combatEvt.resource[s];
+  if(i===2)for(let s=0;s<5;s++)lead[s]+=visEdge*RES_VIS_PROTECT; // 팀 단위 시야 보호(맵 전반) — 단위 4에서 참여자 기반으로 이관
+ }else if(i<5){ // 오브전: edge를 유리한 시작으로 쓰고, 확보 팀은 참여자 결과로 결정(단일 경로)
+  combatEvt=resolveObjective(cs,i,i===3?'herald':'dragon',edgeA,margin,i===3?660:900,crng);
+  for(let s=0;s<5;s++)lead[s]+=combatEvt.resource[s];
+  const sec=combatEvt.objective!.secured;
+  wa=sec==='A'?true:sec==='B'?false:edgeA; // 미확보면 winner만 기록용 edge, momentum·보상·POG는 부여 안 함
+ }else{ // 한타(i>=5): edge/margin = 교전 전 유리한 조건. 실제 승패는 참여자·인원차로.
+  combatEvt=resolveTeamfight(cs,i,edgeA,margin,i===5?1080:i===6?1320:i===7?1560:1800,crng);
+  for(let s=0;s<5;s++)lead[s]+=combatEvt.resource[s];
+  const fw=combatEvt.fight!.winner;
+  wa=fw==='A'?true:fw==='B'?false:edgeA; // 무승부·미교전·전멸이면 기록용 edge, pressure·advantage 이동 없음
+ }
+ const objUnsecured=i>=3&&i<5&&!combatEvt!.objective!.secured; // 확보 팀 없음
+ const tfNoWin=i>=5&&!combatEvt!.fight!.winner;               // 교전 승자 없음(무승부·미교전·전멸)
+ const noMove=objUnsecured||tfNoWin;                          // 확보/보상/승리 점수·momentum 없음
+ const w=wa?m.a:m.b, edgeTeam=edgeA?m.a:m.b;                  // edgeTeam = '전술적 우위'를 결과와 분리해 기록
+ if(!noMove)advantage=clamp(advantage+(wa?delta:-delta),-12,12);
+ if(i<3)laneResults.push(edgeA?1:-1);     // 라인 판정 결과(access 입력) — edge = 라인 승자
+ if(i>=5){const fw=combatEvt!.fight!.winner;if(fw==='A')pressureA++;else if(fw==='B')pressureB++;} // 실제 교전 승자만
+ const gain=i<3?340+flavor()*260:i<5?880+flavor()*520:i<8?1600+flavor()*1500:2600;const passive=540+flavor()*140;
+ gA+=passive+(noMove?gain*0.5:(wa?gain:gain*.34));gB+=passive+(noMove?gain*0.5:(wa?gain*.34:gain)); // 미확보·무승부는 표시 골드도 균등
+ const nr=narrateEvent({i,wa,last:pressureA===3||pressureB===3||i===8,aShort:meta(m.a).short,bShort:meta(m.b).short,p,advantage,advSwing:delta,leadSlots:lead.slice(),de,aChamp:nAChamp,bChamp:nBChamp,aPlayer:nAPlayer,bPlayer:nBPlayer,userIsA:nUserIsA,userTactic:nUserTactic,userFocus:nUserFocus,combat:combatEvt},mem,narr);
+ events.push({index:i,phase:i<3?'라인전':i<5?'오브젝트':'한타',title:labels[i],winner:w,edge:edgeTeam,prob:Math.round(p*1000)/10,advantage,powerA:Math.round(pa[phase]*10)/10,powerB:Math.round(pb[phase]*10)/10,goldA:Math.round(gA/10)*10,goldB:Math.round(gB/10)*10,detail:nr.detail,beats:nr.beats,tier:nr.tier,kills:nr.kills,combat:combatEvt,leadA:Math.round(lead[0]+lead[1]+lead[2]+lead[3]+lead[4]),resPowA:Math.round(resPow*100)/100,compA:Math.round(comp*100)/100});if(pressureA===3||pressureB===3||i===8){winner=pressureA>pressureB?m.a:pressureB>pressureA?m.b:w;break;}} // 세트 승자 = 한타 다수, 동률이면 마지막 사건 방향
+ const own=m.a===g.teamId?pa:pb,other=m.a===g.teamId?pb:pa;const diffs=[avg(own.slice(0,3))-avg(other.slice(0,3)),own[3]-other[3],own[4]-other[4]];const weak=diffs.indexOf(Math.min(...diffs)),strong=diffs.indexOf(Math.max(...diffs));
+ const ws=starters(g,winner),contrib=ws.map(()=>0);for(const e of events.filter(e=>e.winner===winner&&!(e.combat?.objective&&!e.combat.objective.secured)&&!(e.combat?.fight&&!e.combat.fight.winner))){if(e.index===0)contrib[0]+=2;else if(e.index===1)contrib[2]+=2;else if(e.index===2){contrib[3]+=1.3;contrib[4]+=.7;}else [0,1,2,3,4].forEach(i=>contrib[i]+=(e.index<5?[.1,.35,.2,.1,.25]:[.15,.15,.2,.3,.2])[i]*(e.index<5?2:3));}
+ const pog=ws[contrib.indexOf(Math.max(...contrib))].id;
+ return {winner,events,draft,pog,powersA:pa,powersB:pb,leadA:lead.map(x=>Math.round(x)),draftFx:{lane:Math.round(de.lane*100)/100,obj:Math.round(de.obj*100)/100,fight:Math.round(de.fight*100)/100},lineupA:starters(g,m.a).map(p=>p.id),lineupB:starters(g,m.b).map(p=>p.id),recap:[`${['라인전','오브젝트','한타'][strong]} 파워 격차 ${diffs[strong]>=0?'+':''}${diffs[strong].toFixed(1)}. ${diffs[strong]>=0?'우리 팀이 우위를 만들었습니다.':'상대가 전반적인 전력에서 앞섰습니다.'}`,`${['라인전','오브젝트','한타'][weak]}에서 ${Math.abs(diffs[weak]).toFixed(1)}의 전력 ${diffs[weak]<0?'열세':'우위'}. ${weak===2?'피로와 조합, 팀 호흡을 함께 확인하세요.':weak===1?'정글·서포터 훈련과 운영 전술을 검토하세요.':'라인 주도권과 우선 라인을 조정해 보세요.'}`,`마지막 교전에서 우리 팀 승리 확률은 ${(m.a===g.teamId?events.at(-1)!.prob:100-events.at(-1)!.prob).toFixed(1)}%였습니다. 확률이 승리를 보장하지는 않습니다.`]};
+}
+function finishMatch(g:Game,m:Match){m.winner=m.scoreA>m.scoreB?m.a:m.b;const a=team(g,m.a),b=team(g,m.b);if(g.stage==='REGULAR'){a.sw+=m.scoreA;a.sl+=m.scoreB;b.sw+=m.scoreB;b.sl+=m.scoreA;(m.winner===m.a?a:b).wins++;(m.winner===m.a?b:a).losses++;}for(const t of [a,b]){for(const p of g.players.filter(p=>new Set(m.sets.flatMap(s=>t.id===m.a?s.lineupA:s.lineupB)).has(p.id))){p.burn=clamp(p.burn+4);p.form=clamp(p.form+(t.id===m.winner?2:-2));}t.familiarity[key(t)]=clamp((t.familiarity[key(t)]??20)+1,20,100);}
+ for(const set of m.sets){const p=g.players.find(p=>p.id===set.pog);if(p)p.pog++;}
+ for(const s of m.sets)for(const A of [true,false]){const tid=A?m.a:m.b,picks=A?s.draft.picksA:s.draft.picksB,lineup=A?s.lineupA:s.lineupB,won=m.winner===tid,coach=team(g,tid).staff?.coach??0;for(let i=0;i<5;i++){const pl=g.players.find(x=>x.id===lineup[i]);if(!pl||pl.id.startsWith('emergency')||!picks[i])continue;gainMastery(pl,picks[i],Math.round((4+(won?2:0)+(s.pog===pl.id?3:0))*(1+coach*.1)));}}
+ g.history.unshift({id:m.id,a:m.a,b:m.b,sa:m.scoreA,sb:m.scoreB,winner:m.winner,label:m.label,season:g.season});g.history=g.history.slice(0,400);}
+function autoMatch(g:Game,m:Match){ensureLineup(g,m.a);ensureLineup(g,m.b);while(Math.max(m.scoreA,m.scoreB)<Math.floor(m.bestOf/2)+1){const s=simulateSet(g,m);m.sets.push(s);s.winner===m.a?m.scoreA++:m.scoreB++;}finishMatch(g,m);m.sets=[];}
+function settleWeek(g:Game){g.settledWeeks=(g.settledWeeks??0)+1;for(const t of g.teams){const net=Math.round((320000+30000*t.fan/100-50000-payroll(g,t.id)-staffCost(t))/33);pay(g,t,net,'주간 운영 정산');if(t.cash<0){pay(g,t,30000,'구단 비상 지원');if(t.id===g.teamId)news(g,'구단이 3억을 긴급 지원했습니다. 다음 계약 비용을 줄여 주세요.');}}const rng=random(hash(`${g.seed}-${g.season}-${g.split}-${g.round}-${g.settledWeeks}-news`));if(rng()<.15){const t=team(g);if(rng()<.5){t.fan=clamp(t.fan+2);news(g,'지역 팬들의 응원 인터뷰가 공개되었습니다. 팬 만족도 +2');}else{pay(g,t,2000,'스폰서 특별 후원');news(g,'스폰서 특별 후원 0.2억이 입금되었습니다.');}}}
+function poPair(g:Game,n:number):[string,string]{const s=g.poSeeds,w=(i:number)=>g.po[i].winner!,l=(i:number)=>g.po[i].a===w(i)?g.po[i].b:g.po[i].a;if(n===0)return[s[2],s[5]];if(n===1)return[s[3],s[4]];if(n===2||n===3){const wins=[w(0),w(1)].sort((a,b)=>s.indexOf(b)-s.indexOf(a));return[n===2?s[0]:s[1],wins[n===2?0:1]];}if(n===4)return[w(2),w(3)];if(n===5)return[l(2),l(3)];if(n===6)return[l(4),w(5)];return[w(4),w(6)];}
+function nextPO(g:Game){while(g.po.length<8){const n=g.po.length,[a,b]=poPair(g,n);const m:Match={id:`${g.season}-${g.split}-po-${n}`,a,b,bestOf:5,scoreA:0,scoreB:0,sets:[],label:`${g.split} PO ${['6강 A','6강 B','승자조 A','승자조 B','승자조 결승','패자조 1R','패자조 결승','결승'][n]}`};if([a,b].includes(g.teamId)){g.match=m;g.phase='PREP';ensureLineup(g,a);ensureLineup(g,b);return;}autoMatch(g,m);g.po.push(m);}g.champion=g.po[7].winner!;endSplit(g);}
+function endSplit(g:Game){for(let week=0;week<3;week++)settleWeek(g);const rank=(id:string)=>{if(id===g.champion)return 1;const loser=(m:Match)=>m.a===m.winner?m.b:m.a;if(id===loser(g.po[7]))return 2;if(id===loser(g.po[6]))return 3;if(id===loser(g.po[5]))return 4;return g.poSeeds.includes(id)?(g.poSeeds.indexOf(id)<4?5:6):standings(g).findIndex(t=>t.id===id)+1;};for(const t of g.teams.filter(domestic)){const r=rank(t.id);t.fan=clamp(t.fan+(t.expected-r)*3);t.points+=11-(standings(g).findIndex(x=>x.id===t.id)+1)+([15,10,6,6,3,3][r-1]??0);pay(g,t,r===1?20000:r===2?10000:r<=4?5000:2000,'스플릿 상금');}g.hall.unshift({season:g.season,split:g.split,champion:g.champion!,rank:rank(g.teamId)});g.hall=g.hall.slice(0,100);g.phase='SPLIT_END';g.match=null;news(g,`${meta(g.champion!).name}, ${g.split==='SPRING'?'스프링':'서머'} 우승!`);}
+function regularNext(g:Game){const m=g.match!;for(const [a,b]of g.fixtures[g.round])if(![a,b].includes(g.teamId))autoMatch(g,{id:`${g.season}-${g.split}-${g.round}-${a}`,a,b,bestOf:3,scoreA:0,scoreB:0,sets:[],label:`${g.split} R${g.round+1}`});g.match=null;if(g.round%2===1)settleWeek(g);g.round++;if(g.round===18){g.stage='PLAYOFF';g.poSeeds=standings(g).slice(0,6).map(t=>t.id);g.po=[];news(g,'정규시즌이 종료되었습니다. 플레이오프 대진이 확정되었습니다.');nextPO(g);}else{g.phase=g.round%2===0?'PLAN':'PREP';if(g.phase==='PREP')loadMatch(g);}}
+function startSplit(g:Game){g.round=0;g.stage='REGULAR';g.phase='PLAN';g.match=null;g.po=[];g.champion=null;for(const t of g.teams){t.wins=0;t.losses=0;t.sw=0;t.sl=0;}for(const p of g.players){p.burn=clamp(p.burn-20);p.form=50;}g.fixtures=schedule(g.teams.filter(domestic).map(t=>t.id));}
+function nextYear(g:Game){g.season++;g.offWeek=0;g.phase='OFFSEASON';g.match=null;g.meta=metaChampions(g.seed,g.season);const rng=random(hash(`${g.seed}-${g.season}-newyear`));for(const p of g.players){p.age++;const d=p.age>=32?1.5:p.age>=29?1:p.age>=26?.5:0;p.stats=p.stats.map((s,k)=>clamp(s-([0,4].includes(k)?d:p.age>=29?.3:0),1,99));p.pot=p.pot.map((s,k)=>clamp(s-([0,4].includes(k)?d:p.age>=29?.3:0),1,99));p.burn=0;p.form=50;if(p.nextSalary!==undefined){p.salary=p.nextSalary;p.until=p.nextUntil!;delete p.nextSalary;delete p.nextUntil;}if(p.until<g.season){if(p.teamId&&p.teamId!==g.teamId&&ROLES.some(r=>team(g,p.teamId!).lineup[r]===p.id)){p.until=g.season+1;}else p.teamId=null;}}
+ g.players=g.players.filter(p=>!p.id.startsWith('emergency')&&!(p.teamId===null&&(p.age>=40||(p.age>=30&&rng()<.1))));
+ for(let i=0;i<10;i++)g.players.push(makePlayer(100+g.season*10+i,ROLES[i%5],null,42+rng()*18,g.season,rng));for(const t of g.teams){t.points=0;if(t.id!==g.teamId){for(const r of ROLES){let options=roster(g,t.id).filter(p=>p.role===r);if(!options.length){let fa=g.players.filter(p=>!p.teamId&&p.role===r).sort((a,b)=>ovr(b)-ovr(a)).find(p=>payroll(g,t.id)+p.salary<=250000);if(!fa){fa=makePlayer(1000+g.season*100+g.teams.indexOf(t)*5+ROLES.indexOf(r),r,null,38,g.season,rng);g.players.push(fa);}fa.teamId=t.id;fa.until=g.season;options=[fa];}t.lineup[r]=options.sort((a,b)=>ovr(b)-ovr(a))[0].id;}}}
+ const sorted=g.teams.filter(domestic).map(t=>({id:t.id,value:avg(roster(g,t.id).map(ovr))})).sort((a,b)=>b.value-a.value);g.teams.filter(domestic).forEach(t=>t.expected=sorted.findIndex(x=>x.id===t.id)+1);news(g,`시즌 ${g.season} 스토브리그 개막. 만료 계약과 포지션 공석을 확인하세요.`);}
+function requirePhase(g:Game,phases:string[]){if(!phases.includes(g.phase))throw Error('현재 단계에서는 할 수 없는 작업입니다.');}
+export function applyCommand(source:Game,cmd:Command):Game{const g=upgradeGame(structuredClone(source)),p=cmd.payload??{};switch(cmd.type){
+ case 'training':{requirePhase(g,['PLAN']);const ps=p.id==='all'?roster(g):roster(g).filter(x=>x.id===p.id);if(!TRAININGS.some(t=>t.id===p.training)||!ps.length)throw Error('훈련을 확인해 주세요.');const champ=p.champ!==undefined?String(p.champ):undefined;if(champ){if(!CHAMPIONS.some(c=>c.id===champ))throw Error('특훈할 챔피언을 확인해 주세요.');const full=ps.find(x=>!x.mastery.some(m=>m.champ===champ)&&x.mastery.length>=MASTERY_POOL);if(full)throw Error(`${full.name}의 숙련 챔피언이 ${MASTERY_POOL}칸으로 가득 찼습니다. 기존 숙련 챔피언 중에서 골라 주세요.`);}ps.forEach(x=>{x.training=String(p.training);if(p.champ!==undefined)x.trainChamp=champ||undefined;});break;}
+ case 'train':requirePhase(g,['PLAN']);train(g);break;
+ case 'strategy':requirePhase(g,['PLAN','PREP']);if(!TACTICS.some(t=>t.id===p.tactic)||!['TOP','MID','BOT'].includes(String(p.focus)))throw Error('전술을 확인해 주세요.');team(g).tactic=String(p.tactic);team(g).focus=String(p.focus);break;
+ case 'lineup':{requirePhase(g,['PLAN','PREP','OFFSEASON']);const x=roster(g).find(x=>x.id===p.id);if(!x||x.burn>=90)throw Error('출전할 수 없는 선수입니다.');team(g).lineup[x.role]=x.id;break;}
+ case 'startDraft':{requirePhase(g,['PREP']);if(!g.match)loadMatch(g);const m=g.match!;m.draft=undefined;m.draftState=newDraftState(g,m);advanceDraft(g,m,m.draftState);g.phase='DRAFT';break;}
+ case 'draftPick':{requirePhase(g,['DRAFT']);const m=g.match!,ds=m.draftState;if(!ds||ds.complete)throw Error('밴픽이 이미 끝났습니다.');if(draftTurnTeam(ds)!==g.teamId)throw Error('지금은 상대 팀 차례입니다.');const champ=String(p.champ);if(!legalDraftCandidates(g,ds).some(c=>c.id===champ))throw Error('지금 선택할 수 없는 챔피언입니다.');applyDraftStep(ds,champ);advanceDraft(g,m,ds);break;}
+ case 'draftReset':{requirePhase(g,['DRAFT']);const m=g.match!;m.draft=undefined;m.draftState=newDraftState(g,m);advanceDraft(g,m,m.draftState);break;}
+ case 'draftSwap':{requirePhase(g,['DRAFT']);const m=g.match!,ds=m.draftState;if(!ds?.complete)throw Error('밴픽을 먼저 완료해 주세요.');const from=Number(p.from),to=Number(p.to);if(![from,to].every(n=>Number.isInteger(n)&&n>=0&&n<5)||from===to)throw Error('스왑 위치를 확인해 주세요.');const picks=draftPicksOf(ds,g.teamId),rf=ROLES[from],rt=ROLES[to],pf=picks.find(x=>x.role===rf),pt=picks.find(x=>x.role===rt);if(!pf||!pt)throw Error('스왑할 픽을 찾지 못했습니다.');pf.role=rt;pt.role=rf;m.draft=draftToResult(m,ds);break;}
+ case 'play':{requirePhase(g,['DRAFT']);const m=g.match!;if(!m.draftState?.complete&&!m.draft)throw Error('밴픽을 먼저 완료해 주세요.');const r=simulateSet(g,m);m.sets.push(r);r.winner===m.a?m.scoreA++:m.scoreB++;m.draft=undefined;m.draftState=undefined;g.phase='RECAP';break;}
+ case 'continue':{requirePhase(g,['RECAP']);const m=g.match!;if(Math.max(m.scoreA,m.scoreB)>=Math.floor(m.bestOf/2)+1){finishMatch(g,m);g.phase='MATCH_END';news(g,`${meta(m.a).short} ${m.scoreA}:${m.scoreB} ${meta(m.b).short} · ${m.winner===g.teamId?'승리':'패배'}`);}else g.phase='PREP';break;}
+ case 'advance':requirePhase(g,['MATCH_END']);if(g.stage==='REGULAR')regularNext(g);else if(g.stage==='INTERNATIONAL'){recordInternational(g,g.match!);g.match=null;nextInternational(g);}else{g.po.push(g.match!);g.match=null;nextPO(g);}break;
+ case 'nextSplit':requirePhase(g,['SPLIT_END']);startInternational(g,g.split==='SPRING'?'MIDSEASON':'WORLD');break;
+ case 'nextCompetition':requirePhase(g,['WORLD_END']);if(g.international?.kind==='MIDSEASON'){for(let week=0;week<2;week++)settleWeek(g);g.split='SUMMER';startSplit(g);}else {for(let week=0;week<3;week++)settleWeek(g);nextYear(g);}break;
+ case 'offWeek':requirePhase(g,['OFFSEASON']);g.offWeek=Math.min(4,g.offWeek+1);news(g,`스토브리그 ${g.offWeek}주차. FA 시장이 열려 있습니다.`);break;
+ case 'newSeason':requirePhase(g,['OFFSEASON']);for(const r of ROLES){const x=roster(g).find(p=>p.id===team(g).lineup[r]&&p.role===r);if(!x)throw Error(`${r} 선발 선수를 등록해 주세요.`);}if(payroll(g)>250000)throw Error('연봉 총액을 25억 이하로 맞춰 주세요.');for(let week=0;week<4;week++)settleWeek(g);g.split='SPRING';startSplit(g);break;
+ case 'sign':{requirePhase(g,['OFFSEASON']);const x=g.players.find(x=>x.id===p.id&&!x.teamId);if(!x)throw Error('이미 계약한 선수입니다.');if(x.releasedSeason===g.season)throw Error('이번 스토브리그에 방출한 선수는 즉시 재영입할 수 없습니다.');if(roster(g).length>=7)throw Error('로스터는 최대 7명입니다.');if(payroll(g)+x.salary>250000)throw Error('샐러리캡 25억을 초과합니다.');const fee=Math.round(x.salary*.1);if(team(g).cash<fee)throw Error('계약금이 부족합니다.');x.teamId=g.teamId;x.until=g.season+(Number(p.years)===2?1:0);pay(g,team(g),-fee,'FA 계약금 · '+x.name);if(!roster(g).some(q=>q.id===team(g).lineup[x.role]))team(g).lineup[x.role]=x.id;news(g,`${x.name} 영입 완료. 연봉 ${money(x.salary)}`);break;}
+ case 'renew':{requirePhase(g,['PLAN','PREP','OFFSEASON','SPLIT_END']);const x=roster(g).find(x=>x.id===p.id);if(!x)throw Error('선수를 찾지 못했습니다.');const salary=Math.round(20000*(avg(x.stats)/50)**2);if(x.nextSalary!==undefined)throw Error('이미 다음 시즌 계약을 체결했습니다.');if(roster(g).filter(q=>q.id!==x.id&&(q.until>=g.season+1||q.nextUntil)).reduce((v,q)=>v+(q.nextSalary??q.salary),0)+salary>250000)throw Error('재계약 후 캡을 초과합니다.');const fee=Math.round(salary*.05);if(team(g).cash<fee)throw Error('계약금이 부족합니다.');x.nextSalary=salary;x.nextUntil=g.season+1;pay(g,team(g),-fee,'재계약 · '+x.name);news(g,`${x.name}, 다음 시즌 연봉 ${money(salary)}에 재계약`);break;}
+ case 'release':{requirePhase(g,['OFFSEASON']);const x=roster(g).find(x=>x.id===p.id);if(!x)throw Error('선수를 찾지 못했습니다.');const cost=releaseCost(g,x);if(team(g).cash<cost)throw Error(`보장 연봉 ${money(cost)}이 부족합니다.`);pay(g,team(g),-cost,'방출 정산 · '+x.name);x.teamId=null;x.releasedSeason=g.season;delete x.nextSalary;delete x.nextUntil;news(g,`${x.name} 방출. 보장급여 정산 완료.`);break;}
+ case 'hireStaff':{requirePhase(g,['PLAN','PREP','OFFSEASON','SPLIT_END','WORLD_END']);const id=String(p.id),level=Number(p.level);if(!STAFF.some(x=>x.id===id)||!Number.isInteger(level)||level<0||level>3)throw Error('스태프 등급을 확인해 주세요.');const t=team(g);t.staff??={coach:0,analyst:0,psych:0};const current=t.staff[id]??0;if(current===level)throw Error('이미 고용한 등급입니다.');const fee=Math.max(0,Math.round((STAFF_COST[level]-STAFF_COST[current])*.1));if(t.cash<fee)throw Error('고용 계약금이 부족합니다.');pay(g,t,-fee,'스태프 계약금');t.staff[id]=level;news(g,`${STAFF.find(x=>x.id===id)!.name} ${level?level+'등급 고용':'계약 종료'}`);break;}
+ case 'trade':{requirePhase(g,['OFFSEASON']);const a=roster(g).find(x=>x.id===p.offer),b=g.players.find(x=>x.id===p.target&&x.teamId&&x.teamId!==g.teamId);if(!a||!b||a.role!==b.role)throw Error('같은 포지션의 선수 교환만 가능합니다.');const other=team(g,b.teamId!);const quote=tradeQuote(g,a,b);if(quote.reason)throw Error(quote.reason);pay(g,team(g),-quote.cash,'트레이드 보상금 · '+b.name);pay(g,other,quote.cash,'트레이드 보상금');const old=other.id;a.teamId=old;b.teamId=g.teamId;if(team(g).lineup[a.role]===a.id)team(g).lineup[a.role]=b.id;if(other.lineup[b.role]===b.id)other.lineup[b.role]=a.id;news(g,`${a.name} ↔ ${b.name} 트레이드 성사`);break;}
+ default:throw Error('알 수 없는 작업입니다.');}
+ return g;}
+
+export const staffCost=(t:Team)=>Object.values(t.staff??{}).reduce((v,n)=>v+(STAFF_COST[n]??0),0);
+export function releaseCost(g:Game,p:Player){return p.nextSalary!==undefined?p.salary+p.nextSalary*Math.max(0,(p.nextUntil??g.season)-g.season):p.salary*Math.max(0,p.until-g.season+1);}
+export function tradeQuote(g:Game,a:Player,b:Player):{cash:number,reason?:string}{
+ const cash=Math.max(0,Math.round((ovr(b)-ovr(a))*3000+(avg(b.pot)-avg(a.pot))*500));
+ if(!a.teamId||!b.teamId||a.teamId===b.teamId||a.role!==b.role)return{cash,reason:'동일 포지션의 타 구단 선수만 교환할 수 있습니다.'};
+ if(a.nextSalary!==undefined||b.nextSalary!==undefined)return{cash,reason:'다음 시즌 재계약이 예약된 선수는 교환할 수 없습니다.'};
+ if(payroll(g,a.teamId)-a.salary+b.salary>250000||payroll(g,b.teamId)-b.salary+a.salary>250000)return{cash,reason:'거래 후 한 구단의 샐러리캡이 초과됩니다.'};
+ if(team(g,a.teamId).cash<cash)return{cash,reason:'트레이드 보상금이 부족합니다.'};
+ if(ovr(b)-ovr(a)>12)return{cash,reason:'상대 구단이 핵심 선수의 과도한 전력 하락을 이유로 거절합니다.'};
+ return{cash};
+}
+export function upgradeGame(g:Game):Game{
+ if(g.version>3)throw Error('더 새로운 버전의 커리어입니다. 게임을 새로고침해 주세요.');
+ for(const t of g.teams)t.staff??={coach:0,analyst:0,psych:0};
+ for(const pl of g.players){if(!Array.isArray(pl.mastery)||!pl.mastery.length)pl.mastery=makeMastery(pl.role,pl.id,avg(pl.stats));else for(const m of pl.mastery)m.xp??=0;delete (pl as {signature?:unknown}).signature;}
+ g.meta??=metaChampions(g.seed,g.season);
+ for(const [i,m] of FOREIGN_META.entries())if(!g.teams.some(t=>t.id===m.id)){
+  const rng=random(hash(`${g.seed}-foreign-${m.id}`)),lineup={} as Record<Role,string>;
+  for(let r=0;r<5;r++){const p=makePlayer(10000+i*5+r,ROLES[r],m.id,m.base,g.season,rng);const rl=INTL_ROSTER[m.id]?.[r];p.name=rl?rl[0]:handles[(i*5+r+7)%handles.length]+'.'+m.short;p.realName=rl?rl[1]:m.city+' · '+ROLES[r];g.players.push(p);lineup[p.role]=p.id;}
+  const ps=g.players.filter(p=>p.teamId===m.id),total=ps.reduce((a,p)=>a+p.salary,0);if(total>240000)ps.forEach(p=>p.salary=Math.floor(p.salary*240000/total));
+  const t:Team={id:m.id,lineup,familiarity:{},cash:150000,fan:50,expected:5,tactic:['balanced','early','late','objective'][i%4],focus:['TOP','MID','BOT'][i%3],wins:0,losses:0,sw:0,sl:0,points:0,staff:{coach:0,analyst:0,psych:0}};t.familiarity[key(t)]=50;g.teams.push(t);
+ }
+ // Earlier releases did not store participation IDs; preserve resolved results.
+ if(g.match)for(const s of g.match.sets){s.lineupA??=ROLES.map(r=>team(g,g.match!.a).lineup[r]);s.lineupB??=ROLES.map(r=>team(g,g.match!.b).lineup[r]);}
+ // Pre-v3 saves had a fully-auto draft with no interactive state; treat it as a finished draft.
+ if(g.match?.draft&&!g.match.draftState&&g.phase==='DRAFT'){const m=g.match,d=m.draft!;m.draftState={blue:m.a,red:m.b,step:DRAFT_ORDER.length,bans:d.bans.map(champ=>({side:'B' as const,champ})),picksBlue:d.picksA.map((champ,i)=>({champ,role:ROLES[i]})),picksRed:d.picksB.map((champ,i)=>({champ,role:ROLES[i]})),actions:d.actions,complete:true};}
+ g.version=3;return g;
+}
+function tournamentMatch(g:Game,a:string,b:string,label:string,bestOf:number):Match{return{id:`${g.season}-${label}-${a}-${b}`,a,b,label,bestOf,scoreA:0,scoreB:0,sets:[]};}
+function restTravel(g:Game,ids:string[],amount:number){for(const p of g.players)if(p.teamId&&ids.includes(p.teamId))p.burn=clamp(p.burn-amount);}
+function startInternational(g:Game,kind:International['kind']){
+ const domesticSeeds=g.teams.filter(domestic).sort((a,b)=>b.points-a.points||g.poSeeds.indexOf(a.id)-g.poSeeds.indexOf(b.id)).map(t=>t.id);
+ const foreign=FOREIGN_META.map(t=>t.id).sort((a,b)=>avg(starters(g,b).map(ovr))-avg(starters(g,a).map(ovr)));
+ const ids=kind==='MIDSEASON'?[g.champion!,...foreign.slice(0,7)]:[...domesticSeeds.slice(0,3),...foreign];
+ if(ids.length!==(kind==='MIDSEASON'?8:16)||new Set(ids).size!==ids.length)throw Error('국제대회 참가 명단을 확인할 수 없습니다.');
+ const bracket=[...ids].sort((a,b)=>avg(starters(g,b).map(ovr))-avg(starters(g,a).map(ovr)));
+ g.international={kind,stage:kind==='WORLD'?'SWISS':'BRACKET',round:0,participants:ids,table:ids.map(id=>({id,wins:0,losses:0,opponents:[]})),queue:[],matches:[],bracket};
+ g.stage='INTERNATIONAL';g.match=null;g.champion=null;restTravel(g,ids,24);
+ news(g,`${kind==='WORLD'?'월드 챔피언십':'미드시즌 인비테이셔널'} 개막 · ${ids.includes(g.teamId)?'우리 팀이 진출했습니다!':'우리 팀은 불참합니다. 대회 결과를 확인합니다.'}`);
+ if(ids.includes(g.teamId))team(g).fan=clamp(team(g).fan+5);
+ nextInternational(g);
+}
+function swissPairs(rows:{id:string,wins:number,losses:number,opponents:string[]}[],seed:number):[string,string][]{
+ const pairs:[string,string][]=[];const rng=random(seed);
+ for(const wins of [2,1,0]){
+  const group=rows.filter(r=>r.wins===wins&&r.wins<3&&r.losses<3).map(r=>({r,v:rng()})).sort((a,b)=>a.v-b.v).map(x=>x.r);
+  function solve(rest:typeof group):[string,string][]|null{if(!rest.length)return[];const a=rest[0];for(let i=1;i<rest.length;i++){if(a.opponents.includes(rest[i].id))continue;const tail=solve(rest.slice(1,i).concat(rest.slice(i+1)));if(tail)return[[a.id,rest[i].id],...tail];}return null;}
+  const solution=solve(group);if(solution)pairs.push(...solution);else for(let i=0;i<group.length;i+=2){if(!group[i+1])throw Error('스위스 대진 인원이 맞지 않습니다.');pairs.push([group[i].id,group[i+1].id]);}
+ }
+ return pairs;
+}
+function prepareInternationalRound(g:Game){const i=g.international!;
+ if(i.stage==='SWISS'){
+  const active=i.table.filter(r=>r.wins<3&&r.losses<3);
+  if(!active.length){i.stage='BRACKET';i.round=0;i.bracket=i.table.filter(r=>r.wins===3).sort((a,b)=>a.losses-b.losses||i.participants.indexOf(a.id)-i.participants.indexOf(b.id)).map(r=>r.id);if(i.bracket.length!==8)throw Error('스위스 8강 명단 오류');prepareInternationalRound(g);return;}
+  i.round++;if(i.round>5)throw Error('스위스 라운드 제한을 초과했습니다.');
+  i.queue=swissPairs(active,hash(`${g.seed}-${g.season}-swiss-${i.round}`)).map(([a,b])=>{const ra=i.table.find(r=>r.id===a)!;return tournamentMatch(g,a,b,`${i.kind} SWISS ${i.round}`,ra.wins===2||ra.losses===2?3:1);});
+ }else{
+  if(i.bracket.length===1){finishInternational(g);return;}
+  i.round++;i.queue=[];for(let k=0;k<i.bracket.length/2;k++)i.queue.push(tournamentMatch(g,i.bracket[k],i.bracket[i.bracket.length-1-k],`${i.kind} ${i.bracket.length===2?'FINAL':i.bracket.length===4?'SEMIFINAL':'QUARTERFINAL'}`,5));
+  i.bracket=[];
+ }
+ restTravel(g,i.participants,4);
+}
+function recordInternational(g:Game,m:Match){const i=g.international!;if(!m.winner)throw Error('국제 경기 결과가 없습니다.');
+ if(i.stage==='SWISS'){const a=i.table.find(r=>r.id===m.a)!,b=i.table.find(r=>r.id===m.b)!;(m.winner===m.a?a:b).wins++;(m.winner===m.a?b:a).losses++;a.opponents.push(b.id);b.opponents.push(a.id);}else i.bracket.push(m.winner);
+ i.matches.push({...m,sets:[]});
+}
+function nextInternational(g:Game){const i=g.international!;for(let guard=0;guard<100;guard++){
+ if(!i.queue.length){prepareInternationalRound(g);if(g.phase==='WORLD_END')return;}
+ const m=i.queue.shift();if(!m)throw Error('다음 국제 경기가 없습니다.');
+ if([m.a,m.b].includes(g.teamId)){g.match=m;g.phase='PREP';ensureLineup(g,m.a);ensureLineup(g,m.b);return;}
+ autoMatch(g,m);recordInternational(g,m);
+ }throw Error('국제대회 진행 한도를 초과했습니다.');}
+function finishInternational(g:Game){const i=g.international!;i.champion=i.bracket[0];i.stage='DONE';g.champion=i.champion;g.phase='WORLD_END';g.match=null;
+ let rank=0;if(i.participants.includes(g.teamId)){const loss=i.matches.filter(m=>[m.a,m.b].includes(g.teamId)&&m.winner!==g.teamId).at(-1);rank=i.champion===g.teamId?1:loss?.label.includes('FINAL')&&!loss?.label.includes('SEMIFINAL')&&!loss?.label.includes('QUARTERFINAL')?2:loss?.label.includes('SEMIFINAL')?3:loss?.label.includes('QUARTERFINAL')?5:9;}
+ g.hall.unshift({season:g.season,split:i.kind,champion:i.champion!,rank});g.hall=g.hall.slice(0,100);for(const id of i.participants)pay(g,team(g,id),id===i.champion?(i.kind==='WORLD'?100000:50000):5000,'국제대회 상금');if(i.champion===g.teamId)team(g).fan=clamp(team(g).fan+10);
+ news(g,`${meta(i.champion!).name}, ${i.kind==='WORLD'?'월드 챔피언십':'미드시즌 인비테이셔널'} 우승!`);
+}

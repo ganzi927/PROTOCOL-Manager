@@ -155,4 +155,50 @@ function eventNodeOf(e){
  assert.deepEqual(pathBetween('mid','mid'),['mid']);
 }
 
-console.log('PASS replay: determinism, no-spoiler & timing sync, corridor-constrained motion, no post-death action / early revive, absent players not in fights, fixed-seed bot cases, map graph');
+// --- 8. 단위 5: 공성 사건 — 미니맵·중계·구조물 상태 일치 ---
+{
+ let sawSiegeBeat=false, sawNexus=false, sawHeld=false;
+ for(let seed=0;seed<60;seed++){
+  const set=runSet(seed);
+  const rd=buildReplay(set);
+  // 구조물 스냅샷은 단조: 포탑/억제기 진행도만 증가, 넥서스포탑만 감소, 넥서스는 latch.
+  let prev=null;
+  for(const bt of rd.beats){
+   if(!bt.struct)continue;
+   if(prev){
+    for(const S of ['A','B']) for(let L=0;L<3;L++)
+     assert.ok(bt.struct[S][L]>=prev[S][L],`구조물 진행도 단조 (seed ${seed}, ${S}${L})`);
+    assert.ok(bt.struct.baseA<=prev.baseA&&bt.struct.baseB<=prev.baseB,`넥서스포탑은 줄기만 (seed ${seed})`);
+    assert.ok(bt.struct.nexusA>=prev.nexusA&&bt.struct.nexusB>=prev.nexusB,`넥서스 파괴는 유지 (seed ${seed})`);
+    for(const S of ['A','B']) for(let L=0;L<3;L++) assert.ok(bt.struct[S][L]<=3,`진행도 3 이하`);
+   }
+   prev=bt.struct;
+  }
+  // 공성 사건: structuresDown>0 일 때만 siege/nexus '파괴' beat, 그 외엔 무산/중단 문구.
+  for(const e of set.events){
+   const cb=e.combat; if(cb?.kind!=='siege')continue;
+   const sg=cb.siege;
+   const b=rd.beats.find(x=>x.seq===e.index&&(x.kind==='siege'||x.kind==='nexus'));
+   assert.ok(b,`공성 사건엔 공성 beat (seed ${seed}, #${e.index})`);
+   if(sg.structuresDown>0){
+    sawSiegeBeat=true;
+    assert.ok(/철거|파괴/.test(b.text),`철거가 있으면 파괴 문구 (seed ${seed})`);
+    if(sg.nexus){sawNexus=true;assert.equal(b.kind,'nexus');assert.ok(b.struct[sg.side==='A'?'nexusB':'nexusA'],'넥서스 스냅샷 반영');}
+   }else{
+    sawHeld=true;
+    assert.ok(!/억제기 파괴|넥서스 파괴|포탑 \d 철거/.test(b.text),`철거 없으면 파괴라고 안 함 (seed ${seed}, "${b.text}")`);
+   }
+  }
+  // 재생 끝의 구조물 상태 = 엔진 최종. NEXUS 종료면 진 팀 nexus=true.
+  const endStruct=stateAt(rd,rd.duration+5).struct;
+  if(set.endReason==='NEXUS'){
+   assert.ok(endStruct.nexusA||endStruct.nexusB,`NEXUS 종료면 재생 끝에 넥서스 파괴 (seed ${seed})`);
+   assert.equal(endStruct.nexusA&&endStruct.nexusB,false,'양 팀 동시 파괴 없음');
+  }
+ }
+ assert.ok(sawSiegeBeat,'공성 철거 beat 사례 존재');
+ assert.ok(sawNexus,'넥서스 파괴 beat 사례 존재');
+ assert.ok(sawHeld,'공성 무산/중단 beat 사례 존재');
+}
+
+console.log('PASS replay: determinism, no-spoiler & timing sync, corridor-constrained motion, no post-death action / early revive, absent players not in fights, fixed-seed bot cases, map graph, unit-5 siege/structure consistency');

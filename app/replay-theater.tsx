@@ -27,7 +27,7 @@ export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEn
  const lastSnapKey=useRef(''), lastTDisp=useRef(0), lastSeq=useRef(-1);
 
  const snapKey=useCallback((s:ReturnType<typeof stateAt>)=>
-  `${s.seq}|${s.score[0]}:${s.score[1]}|${Math.round(s.gold[0]/50)}:${Math.round(s.gold[1]/50)}|${s.feed.length}|${s.line}`,[]);
+  `${s.seq}|${s.score[0]}:${s.score[1]}|${Math.round(s.gold[0]/50)}:${Math.round(s.gold[1]/50)}|${s.feed.length}|${s.line}|${s.struct.A}${s.struct.B}${s.struct.baseA}${s.struct.baseB}${s.struct.nexusA}${s.struct.nexusB}`,[]);
  const paint=useCallback((t:number)=>{
   for(const tr of rd.tracks){
    const g=iconRefs.current[tr.side+tr.slot]; if(!g)continue;
@@ -108,6 +108,17 @@ export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEn
     {(['A','B'] as const).flatMap(s=>[0,1,2,3,4].map(sl=>icon(s,sl)))}
    </svg>
    <div className="rt-side">
+    {(() => {
+     // 구조물 상태(미니맵에 아직 그리지 않는 사건의 명시적 대체 표시). 엔진 공성 사건 데이터에서만 온다.
+     const st=snap.struct, dmgA=st.B.reduce((x,y)=>x+y,0)+(2-st.baseB)*2, dmgB=st.A.reduce((x,y)=>x+y,0)+(2-st.baseA)*2;
+     const lbl=(arr:number[],base:number,nex:boolean)=>nex?'넥서스 파괴':`${arr.filter(v=>v>=3).length}억제 · 포탑 ${9-arr.reduce((x,y)=>x+y,0)}/9${base<2?` · 넥서스포탑 ${base}/2`:''}`;
+     if(dmgA===0&&dmgB===0)return null;
+     return <div className="rt-struct">
+      <span style={{color:colA}}>{meta(teamA).short}</span> {lbl(st.A,st.baseA,st.nexusA)}
+      <span className="rt-struct-sep">/</span>
+      <span style={{color:colB}}>{meta(teamB).short}</span> {lbl(st.B,st.baseB,st.nexusB)}
+     </div>;
+    })()}
     <div className="rt-nowline">{snap.line||'경기 시작'}</div>
     <ul className="rt-feed">{snap.feed.slice().reverse().map((f,i)=><li key={i} className={`rt-fd${f.text==='FIRST BLOOD'?' fb':''}`}>
      <span className="rt-fd-t">{f.by||f.ref?`${f.by?pn(f.by,names):''}${f.by&&f.ref?' → ':''}${f.ref?pn(f.ref,names):''}`:''}</span>

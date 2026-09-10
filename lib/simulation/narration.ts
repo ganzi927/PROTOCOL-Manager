@@ -59,7 +59,7 @@ const EVENT_MIN=[2.4,5,7.4,11,15,20.5,26.5,32.5,38];
 export function narrateEvent(c:NarrCtx,mem:NarrMemory,rng:()=>number):NarrateResult{
  const {i,wa}=c;
  // 이 사건의 절정 시각(초). 단조 증가.
- const climax=Math.max(mem.sec+35,Math.round((EVENT_MIN[i]+rng()*1.6)*60));
+ const climax=Math.max(mem.sec+35,Math.round(((EVENT_MIN[i]??(EVENT_MIN[8]+(i-8)*2.2))+rng()*1.6)*60));
  mem.sec=climax;
  const wShort=wa?c.aShort:c.bShort, lShort=wa?c.bShort:c.aShort;
  const wCh=wa?c.aChamp:c.bChamp, lCh=wa?c.bChamp:c.aChamp;
@@ -73,6 +73,31 @@ export function narrateEvent(c:NarrCtx,mem:NarrMemory,rng:()=>number):NarrateRes
   if(note)beats.push({t:fmt(climax+4),label:'해설',text:note});
   return {detail,beats,tier,kills};
  };
+
+ // ================= 공성(한타 후속) =================
+ // 실제로 부순 구조물만 말한다. 피해만 입은 구조물을 파괴라고 하지 않는다.
+ if(c.combat&&c.combat.kind==='siege'){
+  const sg=c.combat.siege!;
+  const atkShort=sg.side==='A'?c.aShort:c.bShort, defShort=sg.side==='A'?c.bShort:c.aShort;
+  const laneKor=['탑','미드','바텀'][sg.lane]??'베이스';
+  at(20,'공성', sg.result==='RESET'
+   ? `${c.aShort}·${c.bShort} 모두 정비·귀환. 구조물은 그대로입니다.`
+   : sg.result==='NO_WINDOW'
+   ? `${atkShort}가 ${euro(laneKor)} 붙지만 ${defShort} 부활 병력이 복귀합니다. 공성 각이 없습니다.`
+   : `${atkShort}가 살아남은 인원으로 ${laneKor} 구조물을 두드립니다. 부활까지 ${sg.reinforceIn}초.`);
+  for(const line of c.combat.evidence.slice(1)) at(8,'구조물', line);
+  if(sg.nexus){
+   at(0,'넥서스', `${atkShort}가 넥서스를 파괴합니다. 세트 종료.`);
+   const key=mem.fb?`${mem.fb.clock} 첫 킬이 흐름을 갈랐습니다.`:'중반 격차가 승부를 갈랐습니다.';
+   at(0,'돌아보기', `${key} 최종 킬 스코어 ${mem.teamKills.a} : ${mem.teamKills.b}.`);
+   return done(`${atkShort} 넥서스 파괴 · 세트 종료`, 'close', `${sg.reinforceIn}초의 창을 놓치지 않았습니다.`);
+  }
+  if(sg.result==='HELD'||sg.result==='NO_WINDOW')
+   return done(`${atkShort} 공성 무산 (${laneKor})`, 'build', sg.result==='NO_WINDOW'?`상대 부활 타이밍이 살렸습니다.`:undefined);
+  if(sg.result==='RESET') return done(`양 팀 정비`, 'build');
+  const inhib=sg.result==='INHIB';
+  return done(`${atkShort} ${laneKor} ${inhib?'억제기 파괴':`포탑 ${sg.structuresDown}철거`}`, inhib?'decisive':'clash');
+ }
 
  // ================= 라인 단계 (0~2) =================
  if(i<3){
@@ -293,15 +318,7 @@ export function narrateEvent(c:NarrCtx,mem:NarrMemory,rng:()=>number):NarrateRes
   const lever=managerLever(c,wa,'fight');
   if(lever)at(3,'벤치', lever);
 
-  // 결과 + 다음 영향
-  if(c.last||i===8){
-   at(0,'결과', fr.winner
-    ? `${wShort}가 ${ka}:${kb} 교전을 잡고 억제기를 밀어 넥서스까지 파괴합니다.`
-    : `${ka}:${kb}로 갈린 마지막 대치 끝에 ${wShort}가 기지를 넘습니다.`);
-   const key=mem.fb?`${mem.fb.clock} 첫 킬이 흐름을 갈랐습니다.`:'중반 교전 격차가 승부를 갈랐습니다.';
-   at(0,'돌아보기', `${key} 최종 킬 스코어 ${mem.teamKills.a} : ${mem.teamKills.b}.`);
-   return done(`${wShort} 세트 종료 (${mem.teamKills.a}:${mem.teamKills.b})`, 'close');
-  }
+  // 결과 + 다음 영향. 세트 종료·넥서스 파괴는 공성/종료 사건이 말한다(여기서 넥서스를 주장하지 않는다).
   if(fr.result==='NO_ENGAGE'){
    at(0,'해산', `양 팀 대치만 하다 물러납니다. 승패 없이 자원만 흐릅니다.`);
    return done(`${c.aShort}·${c.bShort} 무교전 대치`, 'build');
@@ -321,11 +338,11 @@ export function narrateEvent(c:NarrCtx,mem:NarrMemory,rng:()=>number):NarrateRes
  kills=wa?{a:wk,b:lk}:{a:lk,b:wk};
  mem.teamKills.a+=kills.a; mem.teamKills.b+=kills.b;
 
- if(c.last||i===8){
-  at(20,'마지막 진격', `${wShort}가 마지막 대치에서 승리하며 억제기를 밀고 넥서스까지 파괴합니다.`);
+ if(c.last||i===8){ // 구세이브 폴백(참여자 combat 없음). 넥서스 파괴는 주장하지 않는다 — 공성 사건이 처리.
+  at(20,'마지막 진격', `${wShort}가 마지막 대치에서 승리하며 상대 기지를 압박합니다.`);
   const key=mem.fb?`${mem.fb.clock} ${LANE[mem.fb.lane]} 첫 킬이 흐름을 갈랐습니다.`:'중반 오브젝트 싸움이 격차를 만들었습니다.';
   at(0,'돌아보기', `${key} 최종 킬 스코어 ${mem.teamKills.a} : ${mem.teamKills.b}.`);
-  return done(`${wShort} 넥서스 파괴 · 세트 종료`, 'close');
+  return done(`${wShort} 마지막 교전 승리 (${wk}:${lk})`, 'close');
  }
 
  const place=pick(rng,FIGHT_PLACE);

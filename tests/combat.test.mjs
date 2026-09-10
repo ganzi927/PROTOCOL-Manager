@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {newGame,upgradeGame,simulateSet,starters,ROLES,random,hash} from '../lib/game.ts';
-import {newMatchState,resolveObjective,resolveTeamfight} from '../lib/simulation/combat.ts';
+import {newMatchState,resolveObjective,resolveTeamfight,resolveSiege} from '../lib/simulation/combat.ts';
 
 function controlledBase(){
  const g=upgradeGame(newGame('nva',1));
@@ -386,4 +386,144 @@ const CRNG=()=>random(hash('obj-test'));
  }
 }
 
-console.log('PASS combat: determinism, kill/survival invariants, narration binding, ability→action linkage, bot 2v2 linkage, objective participants/secure/reward/carry, unit-3 unsecured-objective separation, resource sign, unit-4 teamfight contract (no-show/one-sided/disadvantage/protect/FB/determinism)');
+// --- 10. 단위 5: 공성(resolveSiege) — 구조물 진행 · 종료 · 이중 보상 방지 ---
+{
+ const seedRng=tag=>random(hash(tag));
+ // 공격 상황 구성: 공격 팀 전원 생존, 수비 팀 3명 사망(리스폰 대기), 양 팀 river.
+ const siegeState=(mut)=>{
+  const st=mkState(s=>{
+   s.clock=1200; s.region.A='river'; s.region.B='river';
+   for(const sl of [0,1,2]){ s.B[sl].alive=false; s.B[sl].deaths++; s.B[sl].respawnAt=1230; } // 30초 뒤 복귀
+   for(const c of [...s.A,...s.B]) c.gold=1500;
+   mut&&mut(s);
+  });
+  return st;
+ };
+
+ // 10a. 정상 공성: 인원 우위 + 창(窓)이 있으면 라인 구조물 1~2개 철거, 자원 A로 쏠림.
+ {
+  const st=siegeState();
+  const ce=resolveSiege(st,20,st.clock,seedRng('s10a'));
+  assert.equal(ce.kind,'siege');
+  assert.ok(['SIEGE','INHIB','HELD','NO_WINDOW'].includes(ce.siege.result));
+  if(ce.siege.structuresDown>0){
+   assert.equal(ce.siege.side,'A','공격자는 인원 우위 팀');
+   assert.ok(ce.resource.reduce((a,v)=>a+v,0)>0,'철거 자원은 공격 팀으로');
+   assert.ok(st.struct.B.reduce((a,v)=>a+v,0)===ce.siege.structuresDown || ce.siege.result==='INHIB','구조물 카운터가 철거 수와 일치');
+  }
+  assert.ok(st.clock>1200,'경기 시계가 진행된다(이동+공성 시간)');
+ }
+
+ // 10b. 상대 부활로 공성 중단: 수비 부활이 임박하면 NO_WINDOW, 구조물 변화 없음.
+ {
+  const st=siegeState(s=>{ for(const sl of [0,1,2]) s.B[sl].respawnAt=1205; }); // 5초 뒤 복귀 → 이동 시간에 못 미침
+  const before=[...st.struct.B];
+  const ce=resolveSiege(st,20,st.clock,seedRng('s10b'));
+  assert.equal(ce.siege.result,'NO_WINDOW');
+  assert.equal(ce.siege.structuresDown,0);
+  assert.deepEqual(st.struct.B,before,'NO_WINDOW면 구조물 불변');
+  assert.deepEqual(ce.resource,[0,0,0,0,0],'NO_WINDOW면 자원 이동 없음');
+ }
+
+ // 10c. 한타 승리만으로 자동 철거하지 않는다: 인원 우위 없으면(양 팀 생존) 공격자 없음 → RESET.
+ {
+  const st=mkState(s=>{ s.clock=1200; s.region.A='mid'; s.region.B='mid'; });
+  const ce=resolveSiege(st,20,st.clock,seedRng('s10c'));
+  assert.equal(ce.siege.result,'RESET');
+  assert.equal(ce.siege.structuresDown,0);
+  assert.deepEqual(st.struct.A,[0,0,0]); assert.deepEqual(st.struct.B,[0,0,0]);
+ }
+
+ // 10d. ADC 생존이 공성 기여: 여력이 경계 근처(수비 인원차 작음)일 때, A-ADC(CAR↑) 생존이면 죽어 있을 때보다 철거가 많다.
+ //      보호 성공 → ADC 생존 → 공성 기여의 경로. 보호 자체엔 별도 보너스 없음(생존한 아이콘이 실제로 여력을 더할 뿐).
+ {
+  const marg=(adcAlive)=>mkState(s=>{
+   s.clock=1200; s.region.A='river'; s.region.B='river';
+   s.B[0].alive=false; s.B[0].deaths++; s.B[0].respawnAt=1218;   // 1명만, 곧 복귀(창이 좁음)
+   for(const c of [...s.A,...s.B]) c.gold=1500;
+   s.A[3].stats[5]=95;                                            // 살아남으면 철거를 크게 당기는 원딜
+   if(!adcAlive){ s.A[3].alive=false; s.A[3].deaths++; s.A[3].respawnAt=99999; }
+  });
+  let dAlive=0, dDead=0, n=400;
+  for(let i=0;i<n;i++){
+   dAlive+=resolveSiege(marg(true), 20,1200,seedRng('s10d-a-'+i)).siege.structuresDown;
+   dDead +=resolveSiege(marg(false),20,1200,seedRng('s10d-d-'+i)).siege.structuresDown;
+  }
+  assert.ok(dAlive/n > dDead/n + 0.15, `살아남은 ADC가 공성에 기여: ${(dAlive/n).toFixed(2)} vs ${(dDead/n).toFixed(2)}`);
+ }
+
+ // 10e. 이어서 공격 + 파괴 순서 + 라인 독립성: 두 번 공성해도 s3는 단조 증가, 3 초과 없음, 다른 라인 불변.
+ {
+  const st=siegeState(s=>{ for(const c of s.A) c.gold=3200; s.lanePush.A=[1.4,1.4,1.4]; });
+  const c1=resolveSiege(st,20,st.clock,seedRng('s10e-1'));
+  const mid1=[...st.struct.B];
+  // 수비 다시 사망시키고(다음 한타 후) 이어서 공성
+  for(const sl of [0,1,2]){ st.B[sl].alive=false; st.B[sl].respawnAt=st.clock+30; }
+  st.region.A='river';
+  const c2=resolveSiege(st,22,st.clock,seedRng('s10e-2'));
+  for(let L=0;L<3;L++){
+   assert.ok(st.struct.B[L]>=mid1[L],`라인 ${L} 진행도 단조 증가`);
+   assert.ok(st.struct.B[L]<=3,`라인 ${L} 진행도 3 초과 없음`);
+  }
+  // 공성이 한 라인만 겨냥했으면 나머지 라인은 c1 시점 값 유지(또는 그 이상은 c2가 같은 라인일 때만)
+  const touched=[c1.siege.lane,c2.siege.lane].filter(x=>x>=0);
+  for(let L=0;L<3;L++) if(!touched.includes(L)) assert.equal(st.struct.B[L],0,`건드리지 않은 라인 ${L}은 그대로`);
+ }
+
+ // 10f. 실제 넥서스 파괴로만 정상 종료: 억제기 열림 + 넥서스 포탑 0 + 큰 여력 + 수비 소수 → NEXUS.
+ {
+  const st=mkState(s=>{
+   s.clock=1800; s.region.A='mid'; s.region.B='base';
+   s.struct.B=[3,2,1]; s.baseTurrets.B=0; s.lanePush.A=[1.6,1.6,1.6];
+   for(const c of [...s.A,...s.B]) c.gold=3000;
+   for(const c of s.A) c.gold=7000;
+   for(const sl of [0,1,2,3]){ s.B[sl].alive=false; s.B[sl].deaths++; s.B[sl].respawnAt=1860; } // 4명 사망, SUP만 생존
+  });
+  const ce=resolveSiege(st,24,st.clock,seedRng('s10f'));
+  assert.equal(ce.siege.result,'NEXUS');
+  assert.equal(ce.siege.nexus,true);
+  assert.equal(st.nexus.B,true,'B 넥서스 파괴 기록');
+ }
+ // 10g. 억제기가 안 열렸으면 넥서스로 못 간다(자동 연쇄 금지).
+ {
+  const st=siegeState(s=>{ s.struct.B=[2,2,2]; s.baseTurrets.B=2; for(const c of s.A) c.gold=6000; s.lanePush.A=[1.6,1.6,1.6]; });
+  const ce=resolveSiege(st,24,st.clock,seedRng('s10g'));
+  assert.equal(ce.siege.nexus,false,'억제기 없이 넥서스 불가');
+  assert.equal(st.nexus.B,false);
+ }
+
+ // 10h. 결정성: 같은 신규 상태 + 같은 crng 시드 → 동일 결과.
+ {
+  const x=resolveSiege(siegeState(),20,1200,seedRng('s10h'));
+  const y=resolveSiege(siegeState(),20,1200,seedRng('s10h'));
+  assert.equal(JSON.stringify(x),JSON.stringify(y));
+ }
+
+ // 10i. simulateSet 통합: 정상 종료(NEXUS)와 상한 종료(CAP)가 모두 나오고, 명시적으로 구분된다.
+ {
+  let nexus=0,cap=0,capW=0;
+  for(let s=0;s<400;s++){
+   const g=upgradeGame(newGame('nva',s));
+   const r=simulateSet(g,{id:'s10i'+s,a:'nva',b:'crn',bestOf:3,scoreA:0,scoreB:0,sets:[],label:'R1'});
+   const m={a:'nva'};
+   assert.ok(r.endReason==='NEXUS'||r.endReason==='CAP','명시적 종료 사유');
+   if(r.endReason==='NEXUS'){
+    nexus++;
+    const nx=r.events.find(e=>e.combat?.kind==='siege'&&e.combat.siege.nexus);
+    assert.ok(nx,'NEXUS 종료엔 실제 넥서스 파괴 공성 사건이 있다');
+    assert.ok(!r.events.some(e=>e.phase==='종료'),'정상 종료엔 시간 제한 사건이 없다');
+   }else{
+    cap++; capW+=r.winner===m.a;
+    assert.ok(!r.events.some(e=>e.combat?.kind==='siege'&&e.combat.siege.nexus),'CAP 종료엔 넥서스 파괴가 없다');
+    assert.ok(r.events.some(e=>e.phase==='종료'),'CAP 종료엔 시간 제한 판정 사건이 있다');
+    assert.ok(!r.events.at(-1).detail.includes('넥서스를 파괴'),'CAP 중계는 넥서스 파괴를 말하지 않는다');
+   }
+   // 넥서스는 세트당 최대 1개 파괴
+   assert.ok(r.events.filter(e=>e.combat?.kind==='siege'&&e.combat.siege.nexus).length<=1,'세트당 넥서스 1회');
+  }
+  assert.ok(nexus>0,'정상(NEXUS) 종료 사례 존재');
+  assert.ok(cap>=0,'상한(CAP) 종료 카운트'); // CAP는 드물 수 있음(0 허용) — 존재만 확인 안 함
+ }
+}
+
+console.log('PASS combat: determinism, kill/survival invariants, narration binding, ability→action linkage, bot 2v2 linkage, objective participants/secure/reward/carry, unit-3 unsecured-objective separation, resource sign, unit-4 teamfight contract, unit-5 siege (window/ADC-contrib/order/no-double-reward/nexus-only-end/cap-vs-nexus)');

@@ -2,7 +2,7 @@ import {CHAMPIONS, TAG_LABEL, champImageUrl, type Champion, type ChampTag, type 
 import {TEAM_META, FOREIGN_META, TEAM_LOGO, LCK_ROSTER, INTL_ROSTER} from './rosters.ts';
 import {draftEffects} from './balance/composition.ts';
 import {narrateEvent, newNarrMemory, type Beat, type Tier} from './simulation/narration.ts';
-import {newMatchState, resolveGank, resolveBotLane, resolveObjective, resolveTeamfight, type CombatEvent} from './simulation/combat.ts';
+import {newMatchState, resolveGank, resolveBotLane, resolveObjective, resolveTeamfight, resolveSiege, type CombatEvent, type Side} from './simulation/combat.ts';
 export {CHAMPIONS, TAG_LABEL, champImageUrl, TEAM_META, FOREIGN_META, TEAM_LOGO};
 export type {Champion, ChampTag, ChampType};
 export const ROLES = ['TOP','JGL','MID','ADC','SUP'] as const;
@@ -34,7 +34,7 @@ export type Draft={picksA:string[],picksB:string[],bans:string[],actions:{team:s
 export type DraftPick={champ:string,role:Role};
 export type DraftState={blue:string,red:string,step:number,bans:{side:'B'|'R',champ:string}[],picksBlue:DraftPick[],picksRed:DraftPick[],actions:{team:string,kind:string,champ:string}[],complete:boolean};
 export type GameEvent={index:number,phase:string,title:string,winner:string,edge?:string,prob:number,advantage:number,powerA:number,powerB:number,goldA:number,goldB:number,detail:string,leadA?:number,resPowA?:number,compA?:number,beats?:Beat[],tier?:Tier,kills?:{a:number,b:number},combat?:CombatEvent};
-export type SetResult={winner:string,events:GameEvent[],draft:Draft,recap:string[],pog:string,powersA:number[],powersB:number[],lineupA:string[],lineupB:string[],leadA?:number[],draftFx?:{lane:number,obj:number,fight:number}};
+export type SetResult={winner:string,endReason?:'NEXUS'|'CAP',events:GameEvent[],draft:Draft,recap:string[],pog:string,powersA:number[],powersB:number[],lineupA:string[],lineupB:string[],leadA?:number[],draftFx?:{lane:number,obj:number,fight:number}};
 export type Match={id:string,a:string,b:string,bestOf:number,scoreA:number,scoreB:number,sets:SetResult[],winner?:string,draft?:Draft,draftState?:DraftState,label:string};
 export type RecordMatch={id:string,a:string,b:string,sa:number,sb:number,winner:string,label:string,season:number};
 export type Game={version:number,seed:number,season:number,split:'SPRING'|'SUMMER',round:number,stage:'REGULAR'|'PLAYOFF'|'INTERNATIONAL',phase:'PLAN'|'PREP'|'DRAFT'|'RECAP'|'MATCH_END'|'SPLIT_END'|'OFFSEASON'|'WORLD_END',teamId:string,players:Player[],teams:Team[],fixtures:string[][][],match:Match|null,history:RecordMatch[],news:string[],hall:{season:number,split:string,champion:string,rank:number}[],po:Match[],poSeeds:string[],champion:string|null,trained:boolean,offWeek:number,ledger:{label:string,amount:number}[],planNotice:string[],meta:string[],international?:International,settledWeeks?:number,sandbox?:boolean};
@@ -239,47 +239,108 @@ export function simulateSet(g:Game,m:Match):SetResult{
  const lead=[0,0,0,0,0]; // 슬롯별 자원(+ = A 우세)
  let advantage=0,pressureA=0,pressureB=0,winner='',laneResults:number[]=[];const events:GameEvent[]=[];
  const labels=['탑 라인전','미드 라인전','바텀 라인전','전령 교전','드래곤 교전','중반 교전','후반 교전','마지막 진격','기지 결전'];
- for(let i=0;i<9;i++){const phase=i<3?i:i<5?3:4;const access=i===3?avg(laneResults.slice(0,2))*.5:i===4?avg(laneResults.slice(1))*.5:0;
- const teamLead=lead[0]+lead[1]+lead[2]+lead[3]+lead[4];
- const effLead=clamp(Math.sign(teamLead)*Math.max(0,Math.abs(teamLead)-RES_DEAD),-RES_CAP,RES_CAP);
- const resPow=i<3?0:(i<5?RES_OBJ:RES_FIGHT)*Math.tanh(effLead/RES_SCALE)*(teamLead>=0?convA:convB);
- const comp=i<3?de.lane:i<5?de.obj:de.fight;
- const p=clamp(1/(1+10**(-(pa[phase]-pb[phase]+RES_ADV_K*advantage+access+resPow+comp)/30)),.05,.95);
- const edgeA=rng()<p;                     // 이 구간의 '전술적 우위' 롤. 라인·한타는 확정 승자, 오브전은 '유리한 시작'.
- const margin=clamp(Math.abs(p-0.5)*2.2,0,1),delta=i<3?1:i<6?2:3;
- let combatEvt:CombatEvent|undefined,wa=edgeA; // wa = 자원·advantage·winner에 쓰는 '확정' 방향
- if(i<3){ // 라인 단계: 참여자 기반 전투로 자원 산출 (탑·미드 = 2대1 갱킹, 바텀 = 2v2+정글)
-  combatEvt=i<2
-   ? resolveGank(cs,i,i as 0|1,edgeA,margin,[150,306][i],crng)
-   : resolveBotLane(cs,i,edgeA,margin,498,crng);
-  for(let s=0;s<5;s++)lead[s]+=combatEvt.resource[s];
-  if(i===2)for(let s=0;s<5;s++)lead[s]+=visEdge*RES_VIS_PROTECT; // 팀 단위 시야 보호(맵 전반) — 단위 4에서 참여자 기반으로 이관
- }else if(i<5){ // 오브전: edge를 유리한 시작으로 쓰고, 확보 팀은 참여자 결과로 결정(단일 경로)
-  combatEvt=resolveObjective(cs,i,i===3?'herald':'dragon',edgeA,margin,i===3?660:900,crng);
-  for(let s=0;s<5;s++)lead[s]+=combatEvt.resource[s];
-  const sec=combatEvt.objective!.secured;
-  wa=sec==='A'?true:sec==='B'?false:edgeA; // 미확보면 winner만 기록용 edge, momentum·보상·POG는 부여 안 함
- }else{ // 한타(i>=5): edge/margin = 교전 전 유리한 조건. 실제 승패는 참여자·인원차로.
-  combatEvt=resolveTeamfight(cs,i,edgeA,margin,i===5?1080:i===6?1320:i===7?1560:1800,crng);
-  for(let s=0;s<5;s++)lead[s]+=combatEvt.resource[s];
-  const fw=combatEvt.fight!.winner;
-  wa=fw==='A'?true:fw==='B'?false:edgeA; // 무승부·미교전·전멸이면 기록용 edge, pressure·advantage 이동 없음
+ const CLOCK_CAP=3600, EVENT_CAP=30;      // 무한 실행 방지 상한(경기 시계 초 / 사건 수). 도달은 정상 넥서스 승리와 구분해 기록.
+ let ei=0;                               // GameEvent.index (스켈레톤 0..8, 이후 공성·연장 사건이 이어 붙는다)
+ let endReason:'NEXUS'|'CAP'='CAP';
+ let firstStructSide:Side|null=null;     // 첫 구조물 선취 팀(검증 지표)
+
+ // 구간 확률 롤. phase 0~2 라인 / 3 오브 / 4 한타. resPow(자원→전력)·comp(조합)는 확률 채널 — 구조물 진행은 여기 더하지 않는다(D007 단일 경로).
+ const rollFight=(phase:number,access:number)=>{
+  const teamLead=lead[0]+lead[1]+lead[2]+lead[3]+lead[4];
+  const effLead=clamp(Math.sign(teamLead)*Math.max(0,Math.abs(teamLead)-RES_DEAD),-RES_CAP,RES_CAP);
+  const resPow=(phase<3?0:phase<4?RES_OBJ:RES_FIGHT)*Math.tanh(effLead/RES_SCALE)*(teamLead>=0?convA:convB);
+  const comp=phase<3?de.lane:phase<4?de.obj:de.fight;
+  const p=clamp(1/(1+10**(-(pa[phase]-pb[phase]+RES_ADV_K*advantage+access+resPow+comp)/30)),.05,.95);
+  return {p,resPow,comp,phase,edgeA:rng()<p,margin:clamp(Math.abs(p-0.5)*2.2,0,1)};
+ };
+ // 한타·라인·오브 사건 공통 마무리(momentum·pressure·표시 골드·중계·기록).
+ const finalize=(idx:number,i:number,cb:CombatEvent,r:ReturnType<typeof rollFight>,waIn:boolean)=>{
+  const delta=i<3?1:i<6?2:3;
+  const noMove=(cb.kind==='objective'&&!cb.objective!.secured)||(cb.kind==='teamfight'&&!cb.fight!.winner);
+  const w=waIn?m.a:m.b, edgeTeam=r.edgeA?m.a:m.b;
+  if(!noMove)advantage=clamp(advantage+(waIn?delta:-delta),-12,12);
+  if(i<3)laneResults.push(r.edgeA?1:-1);
+  if(cb.kind==='teamfight'){const fw=cb.fight!.winner;if(fw==='A')pressureA++;else if(fw==='B')pressureB++;} // 실제 교전 승자만 — pressure는 이제 종료 판정의 tiebreak 입력일 뿐
+  const gain=i<3?340+flavor()*260:i<5?880+flavor()*520:1600+flavor()*1500;const passive=540+flavor()*140;
+  gA+=passive+(noMove?gain*0.5:(waIn?gain:gain*.34));gB+=passive+(noMove?gain*0.5:(waIn?gain*.34:gain));
+  const nr=narrateEvent({i,wa:waIn,last:false,aShort:meta(m.a).short,bShort:meta(m.b).short,p:r.p,advantage,advSwing:delta,leadSlots:lead.slice(),de,aChamp:nAChamp,bChamp:nBChamp,aPlayer:nAPlayer,bPlayer:nBPlayer,userIsA:nUserIsA,userTactic:nUserTactic,userFocus:nUserFocus,combat:cb},mem,narr);
+  events.push({index:idx,phase:i<3?'라인전':i<5?'오브젝트':'한타',title:labels[i]??'연장 교전',winner:w,edge:edgeTeam,prob:Math.round(r.p*1000)/10,advantage,powerA:Math.round(pa[r.phase]*10)/10,powerB:Math.round(pb[r.phase]*10)/10,goldA:Math.round(gA/10)*10,goldB:Math.round(gB/10)*10,detail:nr.detail,beats:nr.beats,tier:nr.tier,kills:nr.kills,combat:cb,leadA:Math.round(lead.reduce((a,b)=>a+b,0)),resPowA:Math.round(r.resPow*100)/100,compA:Math.round(r.comp*100)/100});
+ };
+ // 한타 후속 공성. 구조물 골드는 resource로 lead에 1회만 반영(단일 경로). 넥서스 파괴면 true.
+ const doSiege=(idx:number)=>{
+  const se=resolveSiege(cs,idx,cs.clock,crng), sg=se.siege!;
+  for(let s=0;s<5;s++)lead[s]+=se.resource[s];
+  if(sg.structuresDown>0&&!firstStructSide)firstStructSide=sg.side;
+  const atkA=sg.side==='A';
+  const g2=1100+flavor()*380;const pass=540+flavor()*140;
+  gA+=pass+(sg.structuresDown>0?(atkA?g2:g2*0.3):g2*0.5);gB+=pass+(sg.structuresDown>0?(atkA?g2*0.3:g2):g2*0.5);
+  const nr=narrateEvent({i:9,wa:atkA,last:false,aShort:meta(m.a).short,bShort:meta(m.b).short,p:.5,advantage,advSwing:0,leadSlots:lead.slice(),de,aChamp:nAChamp,bChamp:nBChamp,aPlayer:nAPlayer,bPlayer:nBPlayer,userIsA:nUserIsA,userTactic:nUserTactic,userFocus:nUserFocus,combat:se},mem,narr);
+  events.push({index:idx,phase:'공성',title:sg.result==='NEXUS'?'넥서스 파괴':sg.result==='INHIB'?'억제기':sg.result==='NO_WINDOW'?'공성 중단':sg.result==='RESET'?'정비':'공성',winner:sg.structuresDown>0?(atkA?m.a:m.b):'',edge:atkA?m.a:m.b,prob:50,advantage,powerA:0,powerB:0,goldA:Math.round(gA/10)*10,goldB:Math.round(gB/10)*10,detail:nr.detail,beats:nr.beats,tier:nr.tier,kills:nr.kills,combat:se,leadA:Math.round(lead.reduce((a,b)=>a+b,0)),resPowA:0,compA:0});
+  return sg.nexus;
+ };
+
+ let nexusDown=false;
+ for(let i=0;i<9&&!nexusDown;i++){
+  const phase=i<3?i:i<5?3:4;
+  const access=i===3?avg(laneResults.slice(0,2))*.5:i===4?avg(laneResults.slice(1))*.5:0;
+  const r=rollFight(phase,access);
+  let cb:CombatEvent, waIn=r.edgeA;
+  if(i<3){
+   cb=i<2?resolveGank(cs,i,i as 0|1,r.edgeA,r.margin,[150,306][i],crng):resolveBotLane(cs,i,r.edgeA,r.margin,498,crng);
+   cs.clock=[150,306,498][i];
+   for(let s=0;s<5;s++)lead[s]+=cb.resource[s];
+   if(i===2)for(let s=0;s<5;s++)lead[s]+=visEdge*RES_VIS_PROTECT;
+  }else if(i<5){
+   cb=resolveObjective(cs,i,i===3?'herald':'dragon',r.edgeA,r.margin,i===3?660:900,crng);
+   cs.clock=i===3?660:900;
+   for(let s=0;s<5;s++)lead[s]+=cb.resource[s];
+   const sec=cb.objective!.secured;
+   waIn=sec==='A'?true:sec==='B'?false:r.edgeA;
+   if(sec){const L=i===3?0:2;cs.lanePush[sec][L]=Math.min(1.4,cs.lanePush[sec][L]+0.5);} // 오브 확보 → 그 라인 압박(전령=탑, 드래곤=바텀). 미니언 아님.
+  }else{
+   if(i===5)cs.clock=1080;
+   cb=resolveTeamfight(cs,i,r.edgeA,r.margin,cs.clock,crng);
+   for(let s=0;s<5;s++)lead[s]+=cb.resource[s];
+   const fw=cb.fight!.winner;
+   waIn=fw==='A'?true:fw==='B'?false:r.edgeA;
+  }
+  finalize(ei++,i,cb,r,waIn);
+  if(i>=5&&doSiege(ei++)){nexusDown=true;endReason='NEXUS';}
  }
- const objUnsecured=i>=3&&i<5&&!combatEvt!.objective!.secured; // 확보 팀 없음
- const tfNoWin=i>=5&&!combatEvt!.fight!.winner;               // 교전 승자 없음(무승부·미교전·전멸)
- const noMove=objUnsecured||tfNoWin;                          // 확보/보상/승리 점수·momentum 없음
- const w=wa?m.a:m.b, edgeTeam=edgeA?m.a:m.b;                  // edgeTeam = '전술적 우위'를 결과와 분리해 기록
- if(!noMove)advantage=clamp(advantage+(wa?delta:-delta),-12,12);
- if(i<3)laneResults.push(edgeA?1:-1);     // 라인 판정 결과(access 입력) — edge = 라인 승자
- if(i>=5){const fw=combatEvt!.fight!.winner;if(fw==='A')pressureA++;else if(fw==='B')pressureB++;} // 실제 교전 승자만
- const gain=i<3?340+flavor()*260:i<5?880+flavor()*520:i<8?1600+flavor()*1500:2600;const passive=540+flavor()*140;
- gA+=passive+(noMove?gain*0.5:(wa?gain:gain*.34));gB+=passive+(noMove?gain*0.5:(wa?gain*.34:gain)); // 미확보·무승부는 표시 골드도 균등
- const nr=narrateEvent({i,wa,last:pressureA===3||pressureB===3||i===8,aShort:meta(m.a).short,bShort:meta(m.b).short,p,advantage,advSwing:delta,leadSlots:lead.slice(),de,aChamp:nAChamp,bChamp:nBChamp,aPlayer:nAPlayer,bPlayer:nBPlayer,userIsA:nUserIsA,userTactic:nUserTactic,userFocus:nUserFocus,combat:combatEvt},mem,narr);
- events.push({index:i,phase:i<3?'라인전':i<5?'오브젝트':'한타',title:labels[i],winner:w,edge:edgeTeam,prob:Math.round(p*1000)/10,advantage,powerA:Math.round(pa[phase]*10)/10,powerB:Math.round(pb[phase]*10)/10,goldA:Math.round(gA/10)*10,goldB:Math.round(gB/10)*10,detail:nr.detail,beats:nr.beats,tier:nr.tier,kills:nr.kills,combat:combatEvt,leadA:Math.round(lead[0]+lead[1]+lead[2]+lead[3]+lead[4]),resPowA:Math.round(resPow*100)/100,compA:Math.round(comp*100)/100});if(pressureA===3||pressureB===3||i===8){winner=pressureA>pressureB?m.a:pressureB>pressureA?m.b:w;break;}} // 세트 승자 = 한타 다수, 동률이면 마지막 사건 방향
+ // 연장전: 9번째 사건이라는 이유로 승자를 정하지 않는다. 넥서스가 아직이면 운영·교전·공성을 이어간다.
+ while(!nexusDown&&cs.clock<CLOCK_CAP&&ei<EVENT_CAP-1){
+  const r=rollFight(4,0);
+  const cb=resolveTeamfight(cs,9,r.edgeA,r.margin,cs.clock,crng);
+  for(let s=0;s<5;s++)lead[s]+=cb.resource[s];
+  const fw=cb.fight!.winner;
+  finalize(ei++,9,cb,r,fw==='A'?true:fw==='B'?false:r.edgeA);
+  if(ei>=EVENT_CAP-1)break;
+  if(doSiege(ei++)){nexusDown=true;endReason='NEXUS';}
+ }
+ if(nexusDown){
+  winner=cs.nexus.B?m.a:m.b; // B 넥서스 파괴 → A 승
+ }else{
+  // 상한 종료: 넥서스 미파괴. 명시적 판정 — 구조물 우위 > pressure > advantage > 전용 동전. edgeA·마지막 사건 방향을 숨은 기본 승자로 쓰지 않는다.
+  endReason='CAP';
+  const dealt=(atk:Side,def:Side)=>cs.struct[def].reduce((a,b)=>a+b,0)+(2-cs.baseTurrets[def])*2+(cs.nexus[def]?6:0);
+  const sA=dealt('A','B'), sB=dealt('B','A');
+  winner=sA!==sB?(sA>sB?m.a:m.b)
+   :pressureA!==pressureB?(pressureA>pressureB?m.a:m.b)
+   :advantage!==0?(advantage>0?m.a:m.b)
+   :(random(hash(`${g.seed}|tiebreak|${m.id}|${m.sets.length}`))()<0.5?m.a:m.b);
+  const wsS=meta(winner).short;
+  events.push({index:ei++,phase:'종료',title:'시간 제한',winner,edge:winner,prob:50,advantage,powerA:0,powerB:0,goldA:Math.round(gA/10)*10,goldB:Math.round(gB/10)*10,
+   detail:`시간 제한 도달 — 넥서스는 파괴되지 않았습니다. 구조물 피해 ${sA}:${sB} · pressure ${pressureA}:${pressureB} 기준으로 ${wsS} 판정승(정상 종료와 구분).`,
+   beats:[],tier:'close',kills:{a:0,b:0},leadA:Math.round(lead.reduce((a,b)=>a+b,0)),resPowA:0,compA:0});
+ }
  const own=m.a===g.teamId?pa:pb,other=m.a===g.teamId?pb:pa;const diffs=[avg(own.slice(0,3))-avg(other.slice(0,3)),own[3]-other[3],own[4]-other[4]];const weak=diffs.indexOf(Math.min(...diffs)),strong=diffs.indexOf(Math.max(...diffs));
- const ws=starters(g,winner),contrib=ws.map(()=>0);for(const e of events.filter(e=>e.winner===winner&&!(e.combat?.objective&&!e.combat.objective.secured)&&!(e.combat?.fight&&!e.combat.fight.winner))){if(e.index===0)contrib[0]+=2;else if(e.index===1)contrib[2]+=2;else if(e.index===2){contrib[3]+=1.3;contrib[4]+=.7;}else [0,1,2,3,4].forEach(i=>contrib[i]+=(e.index<5?[.1,.35,.2,.1,.25]:[.15,.15,.2,.3,.2])[i]*(e.index<5?2:3));}
+ const ws=starters(g,winner),contrib=ws.map(()=>0);for(const e of events.filter(e=>e.combat&&e.winner===winner&&!(e.combat?.objective&&!e.combat.objective.secured)&&!(e.combat?.fight&&!e.combat.fight.winner))){if(e.index===0)contrib[0]+=2;else if(e.index===1)contrib[2]+=2;else if(e.index===2){contrib[3]+=1.3;contrib[4]+=.7;}else if(e.combat?.kind==='siege')[0,1,2,3,4].forEach(k=>contrib[k]+=[.15,.1,.15,.4,.2][k]*2.5);else [0,1,2,3,4].forEach(k=>contrib[k]+=(e.index<5?[.1,.35,.2,.1,.25]:[.15,.15,.2,.3,.2])[k]*(e.index<5?2:3));}
  const pog=ws[contrib.indexOf(Math.max(...contrib))].id;
- return {winner,events,draft,pog,powersA:pa,powersB:pb,leadA:lead.map(x=>Math.round(x)),draftFx:{lane:Math.round(de.lane*100)/100,obj:Math.round(de.obj*100)/100,fight:Math.round(de.fight*100)/100},lineupA:starters(g,m.a).map(p=>p.id),lineupB:starters(g,m.b).map(p=>p.id),recap:[`${['라인전','오브젝트','한타'][strong]} 파워 격차 ${diffs[strong]>=0?'+':''}${diffs[strong].toFixed(1)}. ${diffs[strong]>=0?'우리 팀이 우위를 만들었습니다.':'상대가 전반적인 전력에서 앞섰습니다.'}`,`${['라인전','오브젝트','한타'][weak]}에서 ${Math.abs(diffs[weak]).toFixed(1)}의 전력 ${diffs[weak]<0?'열세':'우위'}. ${weak===2?'피로와 조합, 팀 호흡을 함께 확인하세요.':weak===1?'정글·서포터 훈련과 운영 전술을 검토하세요.':'라인 주도권과 우선 라인을 조정해 보세요.'}`,`마지막 교전에서 우리 팀 승리 확률은 ${(m.a===g.teamId?events.at(-1)!.prob:100-events.at(-1)!.prob).toFixed(1)}%였습니다. 확률이 승리를 보장하지는 않습니다.`]};
+ const lastTf=events.filter(e=>e.combat?.kind==='teamfight').at(-1)??events.at(-1)!;
+ const endLine=endReason==='NEXUS'
+  ?`${meta(winner).short}가 넥서스를 파괴하며 세트를 마무리했습니다.`
+  :`시간 제한으로 세트가 종료됐습니다 — ${meta(winner).short}가 구조물·교전 우위로 판정승(넥서스 미파괴).`;
+ return {winner,endReason,events,draft,pog,powersA:pa,powersB:pb,leadA:lead.map(x=>Math.round(x)),draftFx:{lane:Math.round(de.lane*100)/100,obj:Math.round(de.obj*100)/100,fight:Math.round(de.fight*100)/100},lineupA:starters(g,m.a).map(p=>p.id),lineupB:starters(g,m.b).map(p=>p.id),recap:[`${['라인전','오브젝트','한타'][strong]} 파워 격차 ${diffs[strong]>=0?'+':''}${diffs[strong].toFixed(1)}. ${diffs[strong]>=0?'우리 팀이 우위를 만들었습니다.':'상대가 전반적인 전력에서 앞섰습니다.'}`,`${['라인전','오브젝트','한타'][weak]}에서 ${Math.abs(diffs[weak]).toFixed(1)}의 전력 ${diffs[weak]<0?'열세':'우위'}. ${weak===2?'피로와 조합, 팀 호흡을 함께 확인하세요.':weak===1?'정글·서포터 훈련과 운영 전술을 검토하세요.':'라인 주도권과 우선 라인을 조정해 보세요.'}`,`${endLine} 마지막 교전 우리 팀 승리 확률은 ${(m.a===g.teamId?lastTf.prob:100-lastTf.prob).toFixed(1)}%였습니다. 확률이 승리를 보장하지는 않습니다.`]};
 }
 function finishMatch(g:Game,m:Match){m.winner=m.scoreA>m.scoreB?m.a:m.b;const a=team(g,m.a),b=team(g,m.b);if(g.stage==='REGULAR'){a.sw+=m.scoreA;a.sl+=m.scoreB;b.sw+=m.scoreB;b.sl+=m.scoreA;(m.winner===m.a?a:b).wins++;(m.winner===m.a?b:a).losses++;}for(const t of [a,b]){for(const p of g.players.filter(p=>new Set(m.sets.flatMap(s=>t.id===m.a?s.lineupA:s.lineupB)).has(p.id))){p.burn=clamp(p.burn+4);p.form=clamp(p.form+(t.id===m.winner?2:-2));}t.familiarity[key(t)]=clamp((t.familiarity[key(t)]??20)+1,20,100);}
  for(const set of m.sets){const p=g.players.find(p=>p.id===set.pog);if(p)p.pog++;}

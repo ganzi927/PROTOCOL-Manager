@@ -58,7 +58,9 @@ const M=(pa,pb)=>({id:'c-1',a:'nva',b:'crn',bestOf:3,scoreA:0,scoreB:0,sets:[],l
   const m=M(pa,pb);
   for(let s=0;s<N;s++){g.seed=s;const r=simulateSet(g,m);
    win+=r.winner===m.a;
-   for(const e of r.events){if(e.index<3){laneN++;laneWin+=e.winner===m.a;}else if(e.index>=5){fightN++;fightWin+=e.winner===m.a;}}
+   // 단위 5: 한타는 kind로 식별. 스켈레톤 한타(처음 4개)만 센다 — 연장 한타는 접전 게임에서만 생겨 ~50%라 조합 신호를 희석(생존편향).
+   let tf=0;
+   for(const e of r.events){if(e.index<3){laneN++;laneWin+=e.winner===m.a;}else if(e.combat?.kind==='teamfight'){if(tf++<4){fightN++;fightWin+=e.winner===m.a;}}}
   }
   return {set:win/N,fight:fightWin/fightN,lane:laneWin/laneN};
  };
@@ -78,6 +80,7 @@ const M=(pa,pb)=>({id:'c-1',a:'nva',b:'crn',bestOf:3,scoreA:0,scoreB:0,sets:[],l
  const r=simulateSet(g,m);
  assert.ok(r.draftFx&&['lane','obj','fight'].every(k=>Math.abs(r.draftFx[k])<=3),'draftFx ±3');
  for(const e of r.events){
+  if(!e.combat||e.combat.kind==='siege')continue; // 공성·종료 사건은 조합 항을 쓰지 않는다(compA=0)
   const expect=e.index<3?r.draftFx.lane:e.index<5?r.draftFx.obj:r.draftFx.fight;
   assert.ok(Math.abs(e.compA-expect)<1e-9,`compA는 draftFx 한 곳에서만 온다 (idx ${e.index})`);
  }

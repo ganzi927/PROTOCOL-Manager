@@ -24,11 +24,13 @@ export type KillRec={killer:Ref,victim:Ref,assists:Ref[],clock:number};
 
 export type ObjectiveKind='herald'|'dragon';
 export type TFResult='ONE_SIDED'|'DECISIVE'|'TRADE'|'NO_ENGAGE'|'NO_SHOW';
+// 공성 결과: 구조물 철거 / 억제기 / 넥서스 파괴 / 부활 병력 도착으로 창(窓) 없음 / 수비가 막음 / 양 팀 정비.
+export type SiegeResult='SIEGE'|'INHIB'|'NEXUS'|'NO_WINDOW'|'HELD'|'RESET';
 // 개인 기여(단위 6 POG 근거). damage는 가상 기여 점수이며 '실제 피해량'이 아니다(체력·피해 시스템 없음).
 export type Contrib={ref:Ref, kill:number, engage:number, protect:number, damage:number, survived:boolean};
 export type CombatEvent={
- seq:number, clock:number, kind:'gank'|'skirmish'|'objective'|'teamfight',
- lane:number|null, side:Side,               // 이 사건에서 이득을 본 팀(오브: 확보 팀 / 한타: 교전 승자, 없으면 유리 팀 — 기록용)
+ seq:number, clock:number, kind:'gank'|'skirmish'|'objective'|'teamfight'|'siege',
+ lane:number|null, side:Side,               // 이 사건에서 이득을 본 팀(오브: 확보 팀 / 한타: 교전 승자, 없으면 유리 팀 — 기록용 / 공성: 공격 팀)
  committed:boolean,                         // 정글 합류(갱킹)
  followUp:boolean,                          // 같은 팀 정글러가 앞서 이미 합류했었다(연속 갱킹)
  spotted:boolean,                           // 수비가 정글 동선을 미리 확인(갱킹)
@@ -40,8 +42,13 @@ export type CombatEvent={
  evidence:string[],                         // 중계가 그대로 인용할 사실
  objective?:{kind:ObjectiveKind, secured:Side|null, outcome:string}, // 오브전 전용
  fight?:{result:TFResult, winner:Side|null, aliveA:number, aliveB:number, contrib:Contrib[]}, // 한타 전용
+ siege?:{result:SiegeResult, side:Side, lane:number, from:string,          // 공성 전용
+  structuresDown:number, reinforceIn:number, capacity:number,
+  structAfter:number[], baseTurretsAfter:number, nexus:boolean},
  notJoined?:{ref:Ref,reason:string}[],      // 합류하지 못한 선수와 이유(오브·한타)
 };
+
+export type Region='base'|'top'|'mid'|'bot'|'river';
 
 export type MatchState={
  A:Combatant[], B:Combatant[],
@@ -49,6 +56,12 @@ export type MatchState={
  lastGankSeq:number|null,
  jglCommits:{A:number,B:number},           // 팀별 정글 합류 횟수(연속 갱킹 판정)
  pendingObjective:ObjectiveKind|null,      // 직전 오브가 미확보로 남았다(다음 사건에서 참조)
+ clock:number,                             // 경기 시계(초). 한타·공성이 실제로 진행시킨다(연출 재생 시각과 분리).
+ struct:{A:number[], B:number[]},          // 공격받는 팀 기준 라인별 진행도 [탑,미드,바텀]: 0 온전 · 1 외곽 · 2 내곽 · 3 억제기 파괴
+ baseTurrets:{A:number, B:number},         // 넥서스 쌍둥이 포탑 남은 수(2→0)
+ nexus:{A:boolean, B:boolean},             // 넥서스 파괴 여부(정상 종료의 유일한 근거)
+ lanePush:{A:number[], B:number[]},        // 추상 라인 압박(공격 팀 관점, 라인별 −1~+1.4). 오브 확보·한타 승리에서 옴 — 미니언 웨이브를 계산하지 않는다.
+ region:{A:Region, B:Region},              // 팀 무게중심 지역(구간 간 이동 시간 계산용 추상 위치)
  events:CombatEvent[],
 };
 
@@ -65,10 +78,23 @@ export function newMatchState(
   mastery:masteryFn(side,slot),off:offRoleFn(side,slot),
   alive:true,respawnAt:0,kills:0,deaths:0,assists:0,gold:0,
  }));
- return {A:mk('A',aStarters,aPicks),B:mk('B',bStarters,bPicks),firstKillDone:false,lastGankSeq:null,jglCommits:{A:0,B:0},pendingObjective:null,events:[]};
+ return {A:mk('A',aStarters,aPicks),B:mk('B',bStarters,bPicks),firstKillDone:false,lastGankSeq:null,jglCommits:{A:0,B:0},pendingObjective:null,
+  clock:0,struct:{A:[0,0,0],B:[0,0,0]},baseTurrets:{A:2,B:2},nexus:{A:false,B:false},lanePush:{A:[0,0,0],B:[0,0,0]},region:{A:'base',B:'base'},events:[]};
 }
 
 const clamp01=(v:number)=>Math.min(1,Math.max(0,v));
+const clampN=(v:number,lo:number,hi:number)=>Math.min(hi,Math.max(lo,v));
+
+// 지역 간 이동 시간(초). 정밀 좌표 대신 라인/강/베이스 추상 이동 — 미니맵 좌표가 판정을 바꾸지 않는다.
+const REGION_DIST:Record<Region,Record<Region,number>>={
+ base:{base:0,top:22,mid:18,bot:22,river:20},
+ top:{base:22,top:0,mid:15,bot:26,river:12},
+ mid:{base:18,top:15,mid:0,bot:15,river:8},
+ bot:{base:22,top:26,mid:15,bot:0,river:12},
+ river:{base:20,top:12,mid:8,bot:12,river:0},
+};
+const regionTime=(from:Region,to:Region)=>REGION_DIST[from][to];
+const opp=(s:Side):Side=>s==='A'?'B':'A';
 // 유효 능력 = 기본 스탯 + 숙련(레벨당 +2) − 오프롤 페널티. game.ts의 OFFROLE_PEN(6)과 맞춘다.
 const eff=(c:Combatant,k:number)=>c.stats[k]+c.mastery*2-(c.off?6:0);
 const RESPAWN=(clock:number)=>10+Math.min(42,clock/60*1.5); // 초, 게임 시간에 따라 증가
@@ -399,7 +425,8 @@ export function resolveTeamfight(
  const cRec=(r:Ref)=>contrib.find(c=>c.ref.side===r.side&&c.ref.slot===r.slot);
  const registerKill=(victim:Combatant, primary:Combatant, assistList:Combatant[])=>{
   if(!victim.alive||!primary.alive||victim.side===primary.side)return;
-  victim.alive=false; victim.deaths++; victim.respawnAt=clock+RESPAWN(clock); primary.kills++;
+  // 처치 시점을 조금씩 벌려 부활도 계단식으로 — 다음 사건에 5v5/4v5가 섞인다(고정 간격 문제 완화).
+  victim.alive=false; victim.deaths++; victim.respawnAt=clock+RESPAWN(clock)+kills.length*4; primary.kills++;
   add(primary, TF_KILL_G*(1+(eff(primary,S_CAR)-50)/240)); add(victim, -TF_DEATH_G);
   cRec({side:primary.side,slot:primary.slot})!.kill+=1;
   const vc=cRec({side:victim.side,slot:victim.slot}); if(vc)vc.survived=false;
@@ -481,6 +508,13 @@ export function resolveTeamfight(
   c.damage=Math.round((eff(cm,S_CAR)*0.6+eff(cm,S_MEC)*0.4)/10 * (c.survived?1:0.55) * (c.kill>0?1.3:1));
  }
  const resource=[0,1,2,3,4].map(s=>res[s]-res[5+s]);
+ // 경기 시계·위치 진행: 교전은 한 지역에서 벌어지고 ~30초를 쓴다(연출 재생 시각과 별개).
+ const fightRegion:Region=seq===5||seq===6?'river':'mid';
+ st.region.A=fightRegion; st.region.B=fightRegion;
+ st.clock=clock+14;   // 교전 자체는 짧다. 큰 시간은 후속 이동·공성(resolveSiege).
+ // 라인 압박: 결판 승자가 다음 공성의 라인 우선순위를 얻는다(추상값, 미니언 아님). 매 사건 소폭 감쇠.
+ for(const s of ['A','B'] as Side[]) for(let L=0;L<3;L++) st.lanePush[s][L]*=0.85;
+ if(winner) for(let L=0;L<3;L++) st.lanePush[winner][L]=clampN(st.lanePush[winner][L]+0.18,-1,1.4);
  const ce:CombatEvent={
   seq,clock,kind:'teamfight',lane:null,side:winner??favSide,
   committed:false,followUp:false,spotted:false,
@@ -490,4 +524,124 @@ export function resolveTeamfight(
  };
  st.events.push(ce);
  return ce;
+}
+
+// ── 공성(한타 후속 행동) ────────────────────────────────────────────────────────────────
+// 한타 승리만으로 구조물을 부수지 않는다. 실제 생존 공격자 · 목표까지 이동 시간 · 상대 부활까지 남은 시간
+// · 살아 있는 수비자 · 라인 압박 · 개인 자원/공성 능력에서 공성 가능량을 산출한다.
+// 살아남은 원딜(보호 성공 포함)의 CAR·자원이 철거에 반영된다 — 보호 자체엔 별도 승리 보너스 없음.
+// 무승부라고 일괄 금지하지 않는다: 생존/수비 상태로 실제 행동 가능 여부를 판단한다.
+// 미지원(문서화): 스플릿 푸시·백도어·바론/장로 버프 공성·라인 스왑·미니언 웨이브 수치.
+const TOWER_G=110, INHIB_G=175, NEXUS_TURRET_G=125, NEXUS_G=220;
+
+export function resolveSiege(st:MatchState, seq:number, clock:number, crng:()=>number):CombatEvent{
+ reviveByClock(st,clock);
+ const alive=(s:Side)=>[0,1,2,3,4].filter(sl=>st[s][sl].alive);
+ const aA=alive('A'), aB=alive('B');
+ const deadGap=(s:Side)=>[0,1,2,3,4].filter(sl=>!st[s][sl].alive).map(sl=>st[s][sl].respawnAt-clock).filter(x=>x>0);
+ const mk=(atkSide:Side|null,result:SiegeResult,lane:number,evd:string[],res:number[],structuresDown:number,reinforceIn:number,capacity:number,nexus:boolean):CombatEvent=>{
+  const resource=[0,1,2,3,4].map(sl=>res[sl]-res[5+sl]);
+  const side=atkSide??'A';
+  const ce:CombatEvent={
+   seq,clock,kind:'siege',lane:lane<0?null:lane,side,
+   committed:false,followUp:false,spotted:false,
+   participants:atkSide?alive(atkSide).map(sl=>({side:atkSide,slot:sl})):[],
+   kills:[],escaped:[],noKill:true,firstBlood:false,
+   resource,prior:null,evidence:evd.length?evd:['양 팀 정비·귀환 — 구조물 변화 없음'],
+   siege:{result,side,lane:lane<0?-1:lane,from:st.region[side],structuresDown,
+    reinforceIn:Math.round(reinforceIn),capacity:Math.round(capacity*100)/100,
+    structAfter:[...st.struct[opp(side)]],baseTurretsAfter:st.baseTurrets[opp(side)],nexus},
+  };
+  st.events.push(ce);
+  return ce;
+ };
+
+ // 공격 자격: 생존 인원이 더 많고, 상대에 리스폰 대기자가 있거나(창이 있음) 인원차 2+.
+ let atkSide:Side|null=null;
+ const dA=aA.length-aB.length;
+ if(dA>=1 && (deadGap('B').length>0 || dA>=2)) atkSide='A';
+ else if(-dA>=1 && (deadGap('A').length>0 || -dA>=2)) atkSide='B';
+ if(!atkSide){ st.clock=clock+22; return mk(null,'RESET',-1,[],[0,0,0,0,0,0,0,0,0,0],0,0,0,false); }
+
+ const defSide=opp(atkSide);
+ const atk=alive(atkSide), def=alive(defSide);
+ const gaps=deadGap(defSide);
+ const reinforceIn=gaps.length?Math.min(...gaps):999;      // 수비 병력 도착까지(초)
+ const s3=st.struct[defSide];
+
+ // 목표 라인: 진행도 최대(단 <3) + 라인 압박. 억제기가 하나라도 열렸으면 대체로 베이스로 전환.
+ const openInhib=s3.some(v=>v>=3);
+ let lane=-1,best=-1e9;
+ for(let L=0;L<3;L++){ if(s3[L]>=3)continue; const v=s3[L]*1.0+st.lanePush[atkSide][L]*0.5+crng()*0.15; if(v>best){best=v;lane=L;} }
+ const targetBase=lane<0 || (openInhib && crng()<0.62);   // 억제기 열림 → 베이스 압박 선택(라인 타워 연쇄로 넥서스까지 한 번에는 못 간다 — openInhib는 이번 사건 진입 시점 기준)
+ const laneRegion:Region=targetBase?'base':(['top','mid','bot'][lane] as Region);
+ const moveTime=regionTime(st.region[atkSide],laneRegion);
+ const windowTime=reinforceIn-moveTime;                    // 도착 후 실제 공성 가능 시간
+
+ if(windowTime<=2){
+  st.clock=clock+moveTime+8; st.region[atkSide]='river'; st.region[defSide]='base';
+  return mk(atkSide,'NO_WINDOW',lane,[`${atkSide} 진입했지만 ${defSide} 부활 병력 복귀 — 물러납니다`],[0,0,0,0,0,0,0,0,0,0],0,reinforceIn,0,false);
+ }
+
+ // 공성 가능량 = 인원차 + 시간 + 자원차(D007 스노볼 경로, 이미 쌓인 gold) + 공성 능력 + 생존 원딜 CAR + 운영 주도권(momentum).
+ const numAdv=atk.length-def.length;
+ const timeF=Math.min(windowTime,45)/45;
+ const goldGap=(atk.reduce((v,sl)=>v+st[atkSide!][sl].gold,0)-def.reduce((v,sl)=>v+st[defSide][sl].gold,0))/1000;
+ const bestObj=Math.max(...atk.map(sl=>eff(st[atkSide!][sl],S_OBJ)));
+ const adcAlive=st[atkSide][3].alive;
+ const adcSiege=adcAlive?(eff(st[atkSide][3],S_CAR)-50)/70:-0.4;   // 살아남은 원딜이 철거를 크게 당긴다
+ const momentum=Math.max(...st.lanePush[atkSide]);               // 연속 공성 주도권(오브·한타 승리·직전 철거에서 누적)
+ // 구조물에서 크게 앞선 쪽만 베이스까지 밀 수 있다. 뒤진 쪽은 견제·지연만(스노볼 되돌리기 금지).
+ const dealtMe=st.struct[defSide].reduce((a,b)=>a+b,0)+(2-st.baseTurrets[defSide])*2;
+ const dealtOpp=st.struct[atkSide].reduce((a,b)=>a+b,0)+(2-st.baseTurrets[atkSide])*2;
+ // 교전 결과(numAdv)와 운영 주도권(momentum)이 주 동력. 자원차는 이미 확률 채널(resPow)에도 쓰였으므로 여기선 보조.
+ let capacity=numAdv*1.15+timeF*1.15+clampN(goldGap,-0.6,0.85)+(bestObj-55)/44+adcSiege*0.75+momentum*1.0;
+ capacity=Math.max(0,capacity);
+ const behind=dealtMe<dealtOpp-3;                                // 이 팀이 구조물에서 크게 뒤진다
+
+ const res=[0,0,0,0,0,0,0,0,0,0];
+ const add=(sl:number,g:number)=>{ st[atkSide!][sl].gold+=g; res[(atkSide==='A'?0:5)+sl]+=g; };
+ const evd:string[]=[`${atkSide} ${atk.length}인 공성 vs ${defSide} ${def.length}인 수비 · 부활까지 ${Math.round(reinforceIn)}초 · 여력 ${capacity.toFixed(1)}`];
+ let structuresDown=0,inhib=false,nexus=false;
+ let budget=Math.floor(capacity);
+ if(behind){ budget=Math.min(budget,1); evd.push(`${atkSide} 구조물 열세 — 견제·지연만`); }
+
+ if(targetBase&&behind){
+  evd.push(`${atkSide} 열세 상태로는 베이스를 밀 수 없습니다`);
+ }else if(targetBase){
+  if(!openInhib){ evd.push(`${atkSide} 베이스 앞 — 억제기가 열리지 않아 진입 불가`); }
+  else {
+   const btDown=Math.min(st.baseTurrets[defSide],Math.max(0,budget));
+   for(let k=0;k<btDown;k++){ st.baseTurrets[defSide]--; structuresDown++; add(3,NEXUS_TURRET_G); add(0,NEXUS_TURRET_G*0.5); evd.push(`${atkSide} 넥서스 쌍둥이 포탑 철거`); }
+   budget-=btDown;
+   if(st.baseTurrets[defSide]===0 && (budget>=2 || (budget>=1 && def.length<=1)) && def.length<=3){
+    st.nexus[defSide]=true; nexus=true; structuresDown++;
+    for(const sl of atk) add(sl,NEXUS_G*0.5);
+    evd.push(`${atkSide}가 넥서스를 파괴합니다 — 경기 종료`);
+   } else if(st.baseTurrets[defSide]===0){
+    evd.push(`넥서스 앞 — 여력(또는 수비 인원) 부족으로 마무리 실패`);
+   }
+  }
+ } else {
+  const step=Math.min(budget,2,3-s3[lane]);                 // 1회 최대 2개, 라인 진행도는 순서대로만
+  for(let k=0;k<step;k++){
+   s3[lane]++; structuresDown++;
+   const isInhib=s3[lane]===3; if(isInhib)inhib=true;
+   add(3,isInhib?INHIB_G:TOWER_G); add(1,(isInhib?INHIB_G:TOWER_G)*0.5); add(0,(isInhib?INHIB_G:TOWER_G)*0.3);
+   evd.push(isInhib?`${atkSide} ${laneRegion} 억제기 파괴`:`${atkSide} ${laneRegion} ${s3[lane]===1?'외곽':'내곽'} 포탑 철거`);
+  }
+  if(structuresDown===0) evd.push(`${atkSide} 압박했지만 ${defSide} 수비에 막혀 철거 실패`);
+ }
+
+ // 운영 주도권: 철거에 성공하면 공격 팀 전 라인 압박↑, 수비 팀 압박↓(다음 공성이 쉬워짐 = 스노볼).
+ for(let L=0;L<3;L++){
+  st.lanePush[atkSide][L]=clampN(st.lanePush[atkSide][L]+(structuresDown>0?0.28:-0.3),-1,1.6);
+  st.lanePush[defSide][L]=clampN(st.lanePush[defSide][L]*(structuresDown>0?0.55:0.9),-1,1.6);
+ }
+ const siegeTime=10+structuresDown*14+(structuresDown===0?6:0);
+ st.clock=clock+moveTime+siegeTime+12;                      // + 정비·귀환
+ st.region[atkSide]=structuresDown>0?laneRegion:'river';
+ st.region[defSide]='base';
+ const result:SiegeResult=nexus?'NEXUS':inhib?'INHIB':structuresDown>0?'SIEGE':'HELD';
+ return mk(atkSide,result,lane,evd,res,structuresDown,reinforceIn,capacity,nexus);
 }

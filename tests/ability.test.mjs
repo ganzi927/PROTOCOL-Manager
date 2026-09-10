@@ -52,10 +52,11 @@ const sum=ns=>ns.reduce((x,y)=>x+y,0);
 }
 
 // 4. 자원이 후속 전투의 유효 전력으로 전환된다: 전 라인 우세 팀의 한타 resPow가 양(+).
+//    단위 5: resPowA는 확률 롤 사건(한타)에만 의미가 있다 — 공성·종료 사건은 제외(kind 필터).
 {
  const g=controlledBase();starters(g).forEach(p=>p.stats.fill(82));
  const m=M(a,b);const N=2000;let res=0,cnt=0;
- for(let s=0;s<N;s++){g.seed=s;for(const e of simulateSet(g,m).events)if(e.index>=5){res+=e.resPowA;cnt++;}}
+ for(let s=0;s<N;s++){g.seed=s;for(const e of simulateSet(g,m).events)if(e.combat?.kind==='teamfight'){res+=e.resPowA;cnt++;}}
  assert.ok(cnt>0&&res/cnt>1.0,`앞선 팀 한타 유효 전력 보정 평균 ${(res/(cnt||1)).toFixed(2)}`);
 }
 
@@ -66,12 +67,12 @@ const sum=ns=>ns.reduce((x,y)=>x+y,0);
  starters(lo)[2].stats[5]=45;starters(lo)[3].stats[5]=45;
  starters(hi)[2].stats[5]=95;starters(hi)[3].stats[5]=95;
  const m=M(a,b);const N=2000;let rLo=0,cLo=0,rHi=0,cHi=0;
+ // 단위 5: 세트 길이가 스노볼로 가변이라(강팀이 넥서스로 빨리 끝냄) 후반 한타는 '지는 쪽만 살아남는' 생존편향이 있다.
+ // resPow→전력 전환은 초반 한타(누적 lead가 라인·오브만 반영할 때)에서 측정한다 — 방법론 보정, 임계값 하향 아님.
  for(let s=0;s<N;s++){
-  lo.seed=s;for(const e of simulateSet(lo,m).events)if(e.index>=5){rLo+=e.resPowA;cLo++;}
-  hi.seed=s;for(const e of simulateSet(hi,m).events)if(e.index>=5){rHi+=e.resPowA;cHi++;}
+  lo.seed=s;let n=0;for(const e of simulateSet(lo,m).events)if(e.combat?.kind==='teamfight'&&n++<3){rLo+=e.resPowA;cLo++;}
+  hi.seed=s;let k=0;for(const e of simulateSet(hi,m).events)if(e.combat?.kind==='teamfight'&&k++<3){rHi+=e.resPowA;cHi++;}
  }
- // 단위 4: 한타 combat 자원(처치/사망 골드)이 lead에 누적돼 후속 한타의 effLead·tanh를 흔든다.
- // CAR이 자원→전투력 전환을 키우는 방향·부호는 유지되나(+0.28) 노이즈 바닥이 올라가 여유를 0.15로 둔다.
  assert.ok(rHi/cHi>rLo/cLo+0.15,`높은 CAR이 자원을 더 큰 전투력으로 전환: ${(rLo/cLo).toFixed(2)} < ${(rHi/cHi).toFixed(2)}`);
 }
 
@@ -80,7 +81,8 @@ const sum=ns=>ns.reduce((x,y)=>x+y,0);
  const g=controlledBase();const m=M(a,b);
  for(let s=0;s<400;s++){g.seed=s*7+1;const r=simulateSet(g,m);
   assert.ok(r.winner===m.a||r.winner===m.b);
-  assert.ok(r.events.length>=5&&r.events.length<=9);
+  assert.ok(r.events.length>=5&&r.events.length<=32); // 단위 5: 스켈레톤 9구간 + 공성·연장 운영 사건(요구 변경)
+  assert.ok(r.endReason==='NEXUS'||r.endReason==='CAP'); // 명시적 종료 사유
   assert.ok(r.leadA.length===5&&r.leadA.every(Number.isFinite));
   for(const e of r.events){
    assert.ok(Number.isFinite(e.leadA)&&Math.abs(e.resPowA)<=8);

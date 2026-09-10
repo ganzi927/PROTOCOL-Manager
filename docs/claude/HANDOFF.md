@@ -1,6 +1,7 @@
 # 다음 세션 인수인계
 
-갱신: 2026-09-10 / **MATCH-SYS 단위 4 완료** (참여자 기반 5v5 한타, D014) · MINIMAP-01 1단계 완료 · 다음 = MATCH-SYS 단위 5(스노볼 + 구조물 종료)
+갱신: 2026-09-10 / **MATCH-SYS 단위 5 완료** (스노볼 + 구조물 기반 종료, D015) · 단위 1~4 완료 · MINIMAP-01 1단계 완료 · 다음 = MATCH-SYS 단위 6(표시 데이터 통합 — POG·골드 그래프·리캡)
+Git: 저장소 초기화됨(단위 4 = `9a15df3` 체크포인트, 단위 5 = `19e4421`, scratch 제외 = `d7a1473`). 배포 없음.
 
 ## 현재 목표
 ABIL-01·COMP-01·CAST-01을 **하나의 경기 시스템**으로 완성한다. 중심 원칙: 엔진이 사건을 계산하고 중계·골드 그래프·POG·리캡·조합 예측이 그 결과만 사용한다. 표시용 별도 추첨 금지, 표시값 전력 이중 반영 금지.
@@ -12,11 +13,12 @@ ABIL-01·COMP-01·CAST-01을 **하나의 경기 시스템**으로 완성한다. 
 - ✅ 단위 2: 바텀 2v2(+정글) 교전 (D011)
 - ✅ 단위 3: 오브전 실제 합류자 + wa 재정의 (D012)
 - ✅ 단위 4: 참여자 기반 5v5 한타 (D014) — `resolveTeamfight`, edgeA=교전 전 유리함, 승패=실제 처치, pressure=`fight.winner`
-- ⬜ 단위 5: 스노볼 + 구조물 기반 종료 ← **다음** · 단위 6: 표시 데이터 통합(POG·골드 그래프·리캡)
+- ✅ 단위 5: 스노볼 + 구조물 기반 종료 (D015) — 실제 경기 시계, `resolveSiege`, 넥서스 파괴로만 정상 종료, 상한(CAP) 별도 사유, pressure는 tiebreak
+- ⬜ 단위 6: 표시 데이터 통합 ← **다음** — POG를 실제 개인 기여로, 골드 그래프, 리캡을 근거 사건으로
 
 **MINIMAP-01**(이동형 미니맵 중계)
-- ✅ 1단계: 지도·경로 골격 + 바텀 갱킹 연결 (D013) — `lib/simulation/replay.ts` + `app/replay-theater.tsx`. 단위 4로 한타 개별 처치 beat가 combat 경로로 자동 표시.
-- ⬜ 2단계: 탑·미드 갱킹(0·1) + 오브전(3·4) + 한타 접근/보호 애니메이션 타이밍 다듬기, `notJoined` 연출
+- ✅ 1단계: 지도·경로 골격 + 바텀 갱킹 연결 (D013). 단위 4로 한타 개별 처치, 단위 5로 공성 사건 + `beat.struct` + 사이드 패널 구조물 텍스트 상태.
+- ⬜ 2단계: 탑·미드 갱킹(0·1) + 오브전(3·4) + 한타 접근/보호 타이밍 다듬기, `notJoined` 연출, 구조물 아이콘 SVG 렌더
 
 **기타**: COMP-01 단계 3(조합 예측 UI)/4(AI 밴픽), 전체 밸런스 민감도 검사
 
@@ -25,6 +27,17 @@ ABIL-01·COMP-01·CAST-01을 **하나의 경기 시스템**으로 완성한다. 
 
 ## 게임 실행 상태
 `npm ci` 완료, 로컬 D1 마이그레이션 적용, `npm run dev` → **http://localhost:5176/** (백그라운드 실행, HMR 반영). Node v22.12.0.
+
+## 완료한 행동/파일 (MATCH-SYS 단위 5, 결정 D015)
+- `lib/simulation/combat.ts`:
+  - `MatchState`에 `clock`(경기 시계 초)·`struct:{A,B:number[3]}`(수비 팀 라인별 진행도 0~3)·`baseTurrets:{A,B}`(2→0)·`nexus:{A,B}`·`lanePush:{A,B:number[3]}`(운영 주도권, 미니언 아님)·`region:{A,B:Region}`. `newMatchState` 초기화. `Region='base'|'top'|'mid'|'bot'|'river'`, `REGION_DIST` 이동 시간 표.
+  - `resolveTeamfight`: 교전 후 `st.clock += 14`, `st.region` = 교전 지역, `registerKill`의 `respawnAt`에 `+ kills.length*4`(계단식 부활 → 다음 사건에 5v5/4v5 섞임). 결판 승자 `lanePush` +0.18, 전 라인 0.85배 감쇠.
+  - **신규 `resolveSiege(st, seq, clock, crng)`** (~95줄): 공격 자격 → 목표 라인/베이스 → `windowTime = 부활까지 − 이동시간`(≤2면 NO_WINDOW) → 여력 `numAdv*1.15 + timeF*1.15 + clamp(goldGap,-0.6,0.85) + (bestObj-55)/44 + adcSiege*0.75 + momentum*1.0` → 구조물 진행(라인 최대 2, 억제기 1개 열려야 베이스, 넥서스 = `baseTurrets===0 && budget충분 && def≤3`). 구조물 열세(−4)면 `budget=min(budget,1)` 견제만. 구조물 골드 `resource[]`로 1회. `CombatEvent.siege={result,side,lane,from,structuresDown,reinforceIn,capacity,structAfter,baseTurretsAfter,nexus}`. `SiegeResult='SIEGE'|'INHIB'|'NEXUS'|'NO_WINDOW'|'HELD'|'RESET'`. 상수 `TOWER_G=110·INHIB_G=175·NEXUS_TURRET_G=125·NEXUS_G=220`.
+- `lib/game.ts` `simulateSet`: 루프 재구성 — `rollFight(phase,access)`·`finalize(idx,i,cb,r,waIn)`·`doSiege(idx)` 클로저. 스켈레톤 `for(i<9)` 각 한타 뒤 `doSiege` → 넥서스면 `endReason='NEXUS'` break. 이후 **연장 루프** `while(!nexusDown && clock<3600 && ei<29)` 한타+공성. 넥서스 없으면 `endReason='CAP'`, `phase:'종료'` 사건 push(판정: 구조물 피해 > pressure > advantage > `random(hash(seed|tiebreak|...))`). `pressure===3` break **삭제**(tiebreak 입력만). `SetResult.endReason`. POG 기여 필터에 `e.combat` 가드 + `kind==='siege'` 가중치 `[.15,.1,.15,.4,.2]`.
+- `lib/simulation/narration.ts`: 공성 브랜치(`c.combat.kind==='siege'` — RESET/NO_WINDOW/HELD/SIEGE/INHIB/NEXUS별 문구, 넥서스 사건이 '돌아보기'+FB 콜백). 한타 브랜치의 `c.last||i===8` 넥서스 주장 **삭제**. `EVENT_MIN[i>=9]` 폴백.
+- `lib/simulation/replay.ts`: `eventNode` 공성 분기(수비 팀 라인 노드). `StructSnapshot`·`beat.struct`(공성 beat마다 양 팀 구조물 스냅샷)·`stateAt().struct`. 사건 앵커 부활(참가자로 복귀 시 그 창에서 부활 beat — `clockMap`/`engineToPlay` 삭제). `e.phase==='종료'` 스킵. 철거된 구조물만 `siege`/`nexus` beat.
+- `app/replay-theater.tsx`: 사이드 패널에 구조물 상태 텍스트(`snap.struct` — 억제/포탑/넥서스포탑 카운트, 미니맵 아이콘 미구현의 명시적 대체 표시). `snapKey`에 struct 포함.
+- 테스트: `tests/combat.test.mjs` 섹션 10(공성 — 창/ADC 기여/순서/이중 보상 방지/넥서스만 종료/CAP vs NEXUS 구분). `tests/replay.test.mjs` 섹션 8(구조물 스냅샷 단조·철거만 파괴 표시·재생 끝=엔진 최종). `tests/teamfight-review.mjs` 단위 5 지표 + 페어 95% CI(McNemar). `ability.test`·`composition.test`·`engine.test` 필터·상한 갱신(요구 변경, 주석).
 
 ## 완료한 행동/파일 (MATCH-SYS 단위 4, 결정 D014)
 - **단위 3 정합성 점검**: 1a·1b·1c 이미 정합(수정 없음), 회귀 테스트 `combat.test` 7e·8a·8b로 고정. 1d(라인 우위 전달 경로 표)·1e(숙련·오프롤 이중 아님, 통제 실험)는 D014에 표로 기록. **수정 불필요.**
@@ -83,6 +96,12 @@ ABIL-01·COMP-01·CAST-01을 **하나의 경기 시스템**으로 완성한다. 
 - `lib/simulation/narration.ts`: `NarrCtx.combat?` 추가. 라인 0·1은 `c.combat`의 실제 참여자·피해자·어시스트·생존으로 beats. 첫 킬은 `combat.firstBlood`에서만. `e.kills`=combat 집계. 라인 2는 기존 휴리스틱 유지.
 - 신규 `tests/combat.test.mjs`.
 
+## 검증 명령과 결과 (단위 5 시점)
+- `combat.test` 섹션 10, `replay.test` 섹션 8 신설 PASS. `ability/composition/narration/management/engine` PASS(engine 1,082 세트). `tsc --noEmit` exit 0, `npm run build` exit 0.
+- **`tests/teamfight-review.mjs 8000`(단위 5)**: 정상(NEXUS) 96.2% / 상한(CAP) 3.8%, 사건/세트 16.8. 오브 확보→구조물 진행 90.5%. 첫 구조물 선취 팀 승률 68%. 공성 시 A-ADC 생존이면 철거 1.76 vs 사망 0.18. 대칭(동일 픽) 승률 49.75%(편향 없음), 태그쌍 균형 48.7%.
+- 강화 효과(동일 시드 페어, 95% CI): TOP LNE +1.48[0.64,2.31] · SUP VIS +1.75[0.98,2.52](딜러 생존 +7.1%p) · JGL OBJ +1.54[0.63,2.45](확보 +10.1%p) · ADC CAR +4.47[3.20,5.75] · ADC MEC +2.95[1.80,4.10] · SUP TF +4.14[2.85,5.42] · 팀+10 +25.76[24.38,27.15]. **모든 CI 0 배제** — 단위 4의 pressure-레이스 압축이 공성→넥서스 경로로 풀림. 단, 작은 효과는 스트림 의존(위 "미검증" 참조).
+- `ability.test`(사건 수 상한·`kind==='teamfight'` 필터·초반 한타 한정)·`composition.test`(동일)·`engine.test`(사건 수 상한)는 **요구 변경**에 맞춰 갱신 — 임계값 하향 아님, 근거 주석. 상세 `VALIDATION.md`(2026-09-10 단위 5 절).
+
 ## 검증 명령과 결과 (단위 4 시점)
 - `node --experimental-strip-types tests/combat.test.mjs` → PASS: 기존(결정성·재처치 금지·중계 바인딩·갱킹·오브전) + **섹션 9(resolveTeamfight 구성 상태 고정)**: 5v5 결과 계약 / 유리 팀 전멸→ONE_SIDED 상대 승 / 양 팀 없음→NO_SHOW / **3v5 열세→한타 승률 <50%** / 핵심 딜러 부재→미참여·재처치 금지 / SUP VIS·TF↑→보호 성공률·딜러 생존율↑ / FB 1회 / 결정성 / TRADE·NO_ENGAGE winner=null.
 - `node --experimental-strip-types tests/teamfight-review.mjs [N]` (신규, 기본 8000 페어 시드): 통제 한타 실험. 균형 50.06%(편향 없음), 결판 93.4%, 딜러 생존 65.2%, 보호 성공 32.1%. 강화별(강화−균형): **SUP VIS +20 딜러 생존 +6.96%p·보호 성공 +13.13%p**, SUP TF +20 세트 +3.2%p·딜러 생존 +6.76%p, ADC CAR +20 세트 +3.2%p·한타 승 +1.99%p, JGL OBJ +20 확보 +10.07%p, TOP LNE +20 세트 +0.46%p. 원자료: 한타 30,189·결판 28,209·무승부 1,980·보호 시도 14,055.
@@ -92,35 +111,39 @@ ABIL-01·COMP-01·CAST-01을 **하나의 경기 시스템**으로 완성한다. 
 - `node node_modules/typescript/bin/tsc --noEmit --incremental false` → exit 0. `npm run build` → exit 0.
 - 전체 표·중계 예시는 `docs/claude/VALIDATION.md`(2026-09-10 단위 4 절).
 
-## edgeA / margin ↔ 결과의 관계 (단위 3~4)
+## edgeA / margin ↔ 결과 / 종료 (단위 3~5)
 - **라인(0~2)**: `edgeA=rng()<p` = 확정 승자. combat은 '어떻게'만.
-- **오브전(3·4)**: `edgeA` = 유리한 시작. `resolveObjective`가 실제 확보 팀(`secured: 'A'|'B'|null`) 결정. `wa = secured ?? edgeA`. `advantage`는 `secured` 기준(미확보면 이동 없음). `UPSET_SECURE` = 실제 사건 역전.
-- **한타(5~8)** (D014): `edgeA`/`margin` = **교전 전 유리함**. `resolveTeamfight`가 `favWins=clamp01(0.5+margin*0.75+numAdvFav)`로 유리 방향을 정하고, **실제 처치 수로 승패 확정**(역전 가능). `wa = fight.winner ?? edgeA`. **pressure는 `fight.winner`에서만**. TRADE/NO_ENGAGE/NO_SHOW/ONE_SIDED는 winner=null 또는 상대 → 사전 edgeA로 안 이김. `edge` 필드에 전술적 우위 분리 기록. `p`(확률) 불변 = 전력 이중 반영 없음. `numAdvFav`(실제 생존 인원차)는 p에 없던 새 채널.
+- **오브전(3·4)**: `edgeA` = 유리한 시작. `resolveObjective`가 실제 확보 팀 결정. `wa = secured ?? edgeA`. `advantage`는 `secured` 기준. 확보 → 그 라인 `lanePush` +0.5.
+- **한타(5~8 + 연장)** (D014): `edgeA`/`margin` = **교전 전 유리함**. `favWins=clamp01(0.5+margin*0.75+numAdvFav)`, **실제 처치 수로 승패 확정**. `wa = fight.winner ?? edgeA`. **pressure는 `fight.winner`에서만**(이제 tiebreak 입력일 뿐). TRADE/NO_ENGAGE/NO_SHOW/ONE_SIDED → 사전 edgeA로 안 이김. `p` 불변.
+- **공성(단위 5, D015)**: 한타 뒤 `resolveSiege`. 승자만·생존 인원차·부활 창·자원·주도권으로 구조물 진행. 한타 승리만으로 자동 철거 안 함. 구조물 골드는 `lead`로 1회(`p`에 별도 항 없음).
+- **종료** (D015): **정상 = 실제 넥서스 파괴 사건에서만**(`endReason='NEXUS'`). 상한(`endReason='CAP'`, `phase:'종료'` 사건) = 구조물 피해 > pressure > advantage > `random(hash(seed|tiebreak))`. **edgeA·마지막 사건 방향을 숨은 기본 승자로 쓰지 않음.** 9번째 사건이라는 이유로 승자 안 정함. `CLOCK_CAP=3600s / EVENT_CAP=30`.
 
 ## 아직 실패하거나 미검증인 것
-- **구조물·넥서스 종료 없음** — 종료는 여전히 `pressure===3`/`i===8` 마지막 사건 승자. 단위 5.
-- **브라우저 육안 확인 안 함**: 한타 미니맵(개별 스컬·처치 피드·`notJoined` 연출), t=0 정지, 탭 비활성 일시정지, 모바일 지도 비율, 아이콘 클릭→선수 상세. `replay.test`(통로·사망 상태·결정성·스포일러) + `tests/teamfight-narration-examples.mjs`로 데이터 정합만 확인.
-- **`numAdvFav`는 9구간 스켈레톤에선 거의 항상 0**: `reviveByClock`이 한타 간격(240s) 안에서 전원 부활 → simulateSet 경로에선 3v5 등이 안 나옴. 구성 상태 고정 테스트(combat 9b·9d)에서만 활성. 단위 5의 스노볼·리스폰 지연에서 실전 활용.
-- **`RES_VIS_PROTECT`(i=2 팀 맵 시야) 미이관**: 단위 5 전체 밸런스 패스에서 한타 참여자 VIS 이관 검토(이관 시 balance 재측정·DECISIONS).
-- **밸런스 재분배**: 한타 스탯(ADC CAR·SUP TF ~+3.2%p)이 라인·오브 스탯(TOP LNE +0.46·JGL OBJ +0.98)보다 커짐. 의도된 결과, 단위 5 전체 밸런스 패스에서 `RES_*`/`OBJ_*`/`TF_*` 검토. **목표 수치 맞춤 전역 조정 안 함.**
-- `팀 전체+10` 통제 8000시드 +20.8%p. 단위 5 밸런스 패스 대상.
+- **브라우저 육안 확인 안 함**: 공성 사건 미니맵(공격자 이동·사이드 패널 구조물 텍스트), 한타 개별 스컬, t=0 정지, 탭 비활성 일시정지, 모바일 지도 비율, 아이콘 클릭. `replay.test`(통로·사망·결정성·스포일러·구조물 스냅샷) + `tests/teamfight-narration-examples.mjs`로 데이터 정합만.
+- **구조물 아이콘 SVG 미구현**: 포탑/억제기/넥서스가 지도에 안 그려짐. 사이드 패널 텍스트가 명시적 대체 표시. MINIMAP-01 2단계.
+- **스노볼 = 개인 성장(레벨/골드 곡선) 없음**: 자원은 `Combatant.gold`로 누적돼 공성 여력·`resPow`에 반영되지만, "성장한 캐리가 끊겨 역전" 같은 명시적 성장 곡선은 없다. `numAdvFav`(실제 인원차)는 계단식 부활 + 좁은 창으로 이제 **가끔** 활성(사망 불참 슬롯 1.3%). 단위 6/후속에서 개인 레벨 근사 검토.
+- **`RES_VIS_PROTECT`(i=2 팀 맵 시야) 여전히 미이관**: 단위 5에서 손대지 않음(D014 결정 유지). 후속 전체 밸런스 패스 대상.
+- **태그쌍 균형 48.7%** (a-vs-b 픽쌍, 단위 4 대비 ~−1.4%p 이동): 이 픽쌍 고유의 `powerDelta` 비대칭이 공성 경로로 다르게 가중된 것. **동일 픽 대칭 = 49.75%(편향 없음)**. 강화 비교는 같은 픽쌍 페어라 무영향. 후속 밸런스 패스에서 `powers()` 픽쌍 비대칭 자체를 별도 검토.
+- **CAP 판정 동전의 편향**: 동일 픽 CAP 게임에서 A승 ~40%(n≈250). CAP가 "A가 못 끝낸" 게임이라 A가 약간 뒤진 상태로 선택되는 순환. CAP는 3~4%뿐이라 전체 승률 영향 <0.3%p. 후속에서 tiebreak 재검토 가능.
+- **작은 강화 효과는 확정 아님**: SUP VIS+20 등은 teamfight-review CI가 0을 배제해도 balance-review(다른 RNG 스트림)에선 부호가 흔들린다. 견고: 큰 효과(ADC CAR·SUP TF·팀+10)와 행동 지표(딜러 생존·보호 성공·오브 확보·첫 구조물).
 - `powersA/powersB`는 D008에서 조합 항 제외.
 
-## 다음 첫 행동 — MATCH-SYS 단위 5 (스노볼 + 구조물 기반 종료)
-`resolveTeamfight` 결과를 구조물 진행으로 잇는다. BACKLOG "단위 5" 절에 6단계 상세.
-1. `MatchState`에 구조물 상태(`towers`/`inhibs`/`nexusOpen` per side), `newMatchState`에서 초기화.
-2. 한타 `DECISIVE`/`ONE_SIDED` 직후 승자 생존 인원 ≥ N & 상대 리스폰 대기 → 그 방향 구조물 파괴(`resolveTeamfight` 반환에 `siege` 또는 별도 `resolveSiege`). 무승부·무교전은 진행 없음.
-3. **종료 조건 교체**: `pressure===3`/`i===8` → `nexusOpen && 다음 한타 승리` 또는 누적 구조물. 안 끝나면 명시적 강제 종료(구조물 > pressure > 마지막 사건 방향). 무한 경기 방지 테스트.
-4. 스노볼: 결과 → 개인 성장(`Combatant` 누적) → 다음 `resolveTeamfight` `eff()`/`numAdvFav`에 소량. **D007 `resPow`와 이중 보상 재점검**(성장이 `p`와 combat 양쪽 안 올리게).
-5. `narration.ts`(억제기→넥서스 흐름) + `replay.ts`(구조물 파괴 beat·포탑 아이콘).
-6. 검증: 유한 종료 스위트, 역전이 성장 선수 사망·목표 교환에서 나오는지, balance-review + 통제 조건 재측정. HANDOFF/BACKLOG/DECISIONS/SESSION_LOG/VALIDATION 갱신.
+## 다음 첫 행동 — MATCH-SYS 단위 6 (표시 데이터 통합)
+BACKLOG "단위 6" 절에 6단계 상세. 요지: **POG를 실제 개인 기여로 계산**한다.
+1. `SetResult`에 슬롯별 세트 기여 집계 추가 = Σ(`combat.fight.contrib`) + 공성 참여(`combat.siege.participants`) + 오브 참여 + 갱킹 킬/어시. **재추첨·재계산 없이 합**(사건 데이터에 이미 있음).
+2. POG = 승리 팀 최댓값 슬롯. 동점은 kill 관여 → protect 성공 → 생존. 역할 고정 점수만으로 뽑지 않음. 이유 문자열을 실제 사건과 연결.
+3. `contrib.damage`는 "가상 점수" — POG 설명에 '실제 피해량'으로 안 씀(체력 시스템 없음).
+4. 골드 그래프: `SetResult.leadA` + `e.goldA/goldB`(저장됨). 중계와 다른 골드 별도 생성 금지.
+5. 리캡: 근거 사건(반전 beat·첫 구조물·넥서스)으로. 미계산 % 설명 금지.
+6. 검증: 결정성, POG 이유 = 실제 사건, 역할 편향 없음(통제 실험 슬롯별 POG 분포), 골드 그래프 = 중계 골드.
 
 ## 재현 시드/경로
-- combat 샘플: `newGame('nva',7)` → `upgradeGame` → `g.seed=<n>` → `simulateSet(g,{a:'nva',b:'crn',...})`. `r.events[i].combat`. 오브: seed 17 = 전령 CONTESTED→드래곤 pending 참조, seed 88 = 드래곤 UPSET_SECURE+FB, seed 3 = 전령 A확보·드래곤 B확보.
-- **한타(단위 4)**: 통제 base(전스탯70) + `structuredClone` + `g.seed=<seed>`. seed 0 #7 = 보호 성공(A-SUP)→A-ADC 생존, seed 6 #5 = edgeA=A인데 winner=B(사전 픽으로 안 이김) + 한타 FB, seed 50 #8 = TRADE winner=null. `resolveTeamfight` 직접 호출: `mkState`(combat.test) + `kill(st,side,slots)` 로 구성 상태(3v5·딜러 부재·전멸).
-- 실험 하네스: `node --experimental-strip-types tests/teamfight-review.mjs 8000`. 예시 스크립트: `tests/teamfight-narration-examples.mjs`.
+- combat 샘플: `newGame('nva',7)` → `upgradeGame` → `g.seed=<n>` → `simulateSet(g,{a:'nva',b:'crn',...})`. `r.endReason`('NEXUS'|'CAP'), `r.events[i].combat`.
+- **공성/종료(단위 5)**: 통제 base(전스탯70) + `structuredClone` + `g.seed=<seed>`. `tests/teamfight-narration-examples.mjs` 실행 → NO_WINDOW/INHIB/NEXUS/CAP/TRADE 각 사례 + 재현 시드 출력. `resolveSiege` 직접 호출: `mkState`(combat.test 섹션 7) + `s.clock`·`s.struct.B`·`s.baseTurrets.B` 설정 + `s.B[sl].alive=false; respawnAt=...`(창 조절).
+- **한타(단위 4)**: seed 0 #7 = 보호 성공→A-ADC 생존, seed 6 #5 = edgeA=A인데 winner=B, seed 50 #8 = TRADE.
+- 실험 하네스: `node --experimental-strip-types tests/teamfight-review.mjs 8000`(단위 4·5 지표 + 페어 95% CI). `tests/balance-review.mjs`. 임시 대칭 체크: 동일 픽으로 `simulateSet` N회.
 - 결정성: 같은 seed 2회 `JSON.stringify(simulateSet)` 동일.
-- 미니맵 재생: `buildReplay(simulateSet(g,m))` → `rd`. `stateAt(rd,t)`·`posAt(rd.tracks[k],t)`. seed 88 = 바텀 처치+한타 다수.
+- 미니맵 재생: `buildReplay(simulateSet(g,m))` → `rd`. `stateAt(rd,t).struct` = 그 시점 구조물 상태.
 
 ## 작업 경계
 라이브 배포 없음. Claude 연결 계정 없음. 세이브 삭제/마이그레이션 수정 없음. package.json/lockfile 변경 없음(`npm ci`만). 과거 완료 경기를 새 엔진으로 재계산하지 않음.

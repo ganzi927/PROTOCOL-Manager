@@ -1,12 +1,14 @@
 'use client';
 import {useRef,useEffect,useState,useMemo,useCallback} from 'react';
 import {champImageUrl,champName,meta} from '@/lib/game';
-import {buildReplay,stateAt,posAt,MAP,type ReplayData} from '@/lib/simulation/replay';
-import {Play,Pause,SkipForward,RotateCcw} from 'lucide-react';
+import {buildReplay,stateAt,posAt,agentsAt,MAP,type ReplayData} from '@/lib/simulation/replay';
+import {Play,Pause,SkipForward,RotateCcw,Bug} from 'lucide-react';
 
 type SetLike={events:any[],lineupA:string[],lineupB:string[],draft:{picksA:string[],picksB:string[]}};
 
-// 재생 시각 t에서의 상태를 저압축으로만 리렌더(점수·골드·피드·중계). 위치는 rAF에서 DOM 직접 갱신.
+const ACT_KO:Record<string,string>={lane:'라인',jungle:'정글',roam:'로밍',group:'집결',fight:'교전',retreat:'후퇴',recall:'귀환',base:'부활',dead:'사망'};
+
+// 위치는 rAF에서 DOM 직접 갱신. 이산 상태(점수·골드·피드·중계·구조물)만 저압축 리렌더.
 export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEnd,onProgress}:{
  set:SetLike, teamA:string, teamB:string, mineIsA:boolean,
  names:{a:string[],b:string[]}, onSelectPlayer:(id:string)=>void, onEnd?:()=>void, onProgress?:(seq:number)=>void,
@@ -19,21 +21,37 @@ export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEn
 
  const tRef=useRef(0), playingRef=useRef(true), speedRef=useRef(1), lastRef=useRef(0), rafRef=useRef(0);
  const iconRefs=useRef<Record<string,SVGGElement|null>>({});
+ const pathRefs=useRef<Record<string,SVGPolylineElement|null>>({});
+ const actRefs=useRef<Record<string,SVGTextElement|null>>({});
  const [snap,setSnap]=useState(()=>stateAt(rd,0));
  const [playing,setPlaying]=useState(true);
  const [speed,setSpeed]=useState(1);
  const [hidden,setHidden]=useState(false);
- const [tDisplay,setTDisplay]=useState(0);   // 초 단위, 0.25s마다만 갱신(시크바)
+ const [debug,setDebug]=useState(false);
+ const [tDisplay,setTDisplay]=useState(0);
+ const debugRef=useRef(false); debugRef.current=debug;
  const lastSnapKey=useRef(''), lastTDisp=useRef(0), lastSeq=useRef(-1);
 
  const snapKey=useCallback((s:ReturnType<typeof stateAt>)=>
   `${s.seq}|${s.score[0]}:${s.score[1]}|${Math.round(s.gold[0]/50)}:${Math.round(s.gold[1]/50)}|${s.feed.length}|${s.line}|${s.struct.A}${s.struct.B}${s.struct.baseA}${s.struct.baseB}${s.struct.nexusA}${s.struct.nexusB}`,[]);
+
+ // 초상화 겹침 완화용 표시 보정(논리 위치와 구분): 교전·사망 클러스터에서만 소량 흩뿌림.
+ const scatter=(side:'A'|'B',slot:number):[number,number]=>{
+  const i=(side==='A'?0:5)+slot, ang=i*2.399; return [Math.cos(ang)*2.4, Math.sin(ang)*2.4];
+ };
  const paint=useCallback((t:number)=>{
+  const ags=debugRef.current?agentsAt(rd,t):null;
   for(const tr of rd.tracks){
-   const g=iconRefs.current[tr.side+tr.slot]; if(!g)continue;
-   const {pos,state}=posAt(tr,t);
-   g.setAttribute('transform',`translate(${pos[0]} ${pos[1]})`);
-   g.setAttribute('data-state',state);
+   const key=tr.side+tr.slot;
+   const g=iconRefs.current[key];
+   if(g){ const {pos,state}=posAt(tr,t);
+    const off=(state==='fight'||state==='dead')?scatter(tr.side,tr.slot):[0,0];
+    g.setAttribute('transform',`translate(${pos[0]+off[0]} ${pos[1]+off[1]})`); g.setAttribute('data-state',state); }
+   if(ags){
+    const a=ags.find(x=>x.side===tr.side&&x.slot===tr.slot)!;
+    const pl=pathRefs.current[key]; if(pl) pl.setAttribute('points',a.path.map(p=>`${p[0]},${p[1]}`).join(' '));
+    const at=actRefs.current[key]; if(at){ at.setAttribute('transform',`translate(${a.pos[0]} ${a.pos[1]})`); at.textContent=(ACT_KO[a.act||'']||''); }
+   }
   }
   const s=stateAt(rd,t), key=snapKey(s);
   if(key!==lastSnapKey.current){lastSnapKey.current=key;setSnap(s);}
@@ -41,7 +59,7 @@ export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEn
   if(Math.abs(t-lastTDisp.current)>=0.25){lastTDisp.current=t;setTDisplay(t);}
  },[rd,snapKey,onProgress]);
 
- useEffect(()=>{ // rAF 재생 루프
+ useEffect(()=>{ // rAF 재생 루프 — 프레임률이 경기 판단에 영향 없음(위치·상태 모두 t의 함수)
   lastRef.current=performance.now();
   const loop=(now:number)=>{
    const dt=Math.min(0.1,(now-lastRef.current)/1000); lastRef.current=now;
@@ -56,7 +74,9 @@ export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEn
   return ()=>cancelAnimationFrame(rafRef.current);
  },[rd,paint,onEnd]);
 
- useEffect(()=>{ // 탭 비활성 시 자동 일시정지(복귀 후 수동 재개)
+ useEffect(()=>{ paint(tRef.current); },[debug,paint]); // 디버그 토글 즉시 반영
+
+ useEffect(()=>{
   const onVis=()=>{ const h=document.hidden; setHidden(h); if(h){playingRef.current=false;setPlaying(false);} };
   document.addEventListener('visibilitychange',onVis);
   return ()=>document.removeEventListener('visibilitychange',onVis);
@@ -68,7 +88,8 @@ export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEn
  const nextEvent=()=>{const w=rd.windows.find(w=>w.start>tRef.current+0.05);seek(w?w.start:rd.duration);};
  const restart=()=>{tRef.current=0;playingRef.current=true;setPlaying(true);lastRef.current=performance.now();lastSnapKey.current='';paint(0);};
 
- // 지도 경로(통로) — 배경과 이동이 같은 좌표계
+ // 통로(WALK) — 디버그에서 보행 가능 영역
+ const navLines=useMemo(()=>rd.nav.segs.map((s,i)=><line key={i} x1={s[0][0]} y1={s[0][1]} x2={s[1][0]} y2={s[1][1]} className="rt-nav"/>),[rd]);
  const edgeLines=MAP.edges.map(([x,y],i)=>{const a=MAP.nodes[x],b=MAP.nodes[y];return <line key={i} x1={a[0]} y1={a[1]} x2={b[0]} y2={b[1]} className="rt-corridor"/>;});
  const dead=snap.dead;
  const mm=(sec:number)=>`${String(Math.floor(sec/60)).padStart(2,'0')}:${String(Math.floor(sec%60)).padStart(2,'0')}`;
@@ -90,26 +111,30 @@ export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEn
  return <div className="replay-theater">
   <div className="rt-strip">
    <span className="rt-team" style={{color:colA}}>{meta(teamA).short}<b>{snap.score[0]}</b></span>
-   <span className="rt-clock">{mm(snap.engineClock)}<small> IN-GAME</small></span>
+   <span className="rt-clock">{mm(snap.gameClock)}<small> IN-GAME</small></span>
    <span className="rt-team right"><b>{snap.score[1]}</b>{meta(teamB).short}</span>
    <span className="rt-gold">골드 {(snap.gold[mineIsA?0:1]/1000).toFixed(1)}k <em>vs</em> {(snap.gold[mineIsA?1:0]/1000).toFixed(1)}k</span>
   </div>
   <div className="rt-stage">
-   <svg viewBox="0 0 100 100" className="rt-map" preserveAspectRatio="xMidYMid meet">
+   <svg viewBox="0 0 100 100" className={`rt-map${debug?' rt-debug':''}`} preserveAspectRatio="xMidYMid meet">
     <defs><clipPath id="rtclip"><circle cx="0" cy="0" r="3"/></clipPath></defs>
     <rect x="0" y="0" width="100" height="100" className="rt-bg"/>
     <polygon points="0,100 100,100 100,0" className="rt-halfB"/>
     <line x1="0" y1="100" x2="100" y2="0" className="rt-river"/>
     <g className="rt-corridors">{edgeLines}</g>
+    {debug&&<g className="rt-navlayer">{navLines}</g>}
     <rect x={MAP.nodes.A_base[0]-6} y={MAP.nodes.A_base[1]-6} width="12" height="12" className="rt-base" style={{fill:colA}}/>
     <rect x={MAP.nodes.B_base[0]-6} y={MAP.nodes.B_base[1]-6} width="12" height="12" className="rt-base" style={{fill:colB}}/>
     <circle cx={MAP.nodes.baron[0]} cy={MAP.nodes.baron[1]} r="3.4" className="rt-obj"/><text x={MAP.nodes.baron[0]} y={MAP.nodes.baron[1]-4.5} className="rt-objlabel" textAnchor="middle">전령/바론</text>
     <circle cx={MAP.nodes.dragon[0]} cy={MAP.nodes.dragon[1]} r="3.4" className="rt-obj"/><text x={MAP.nodes.dragon[0]} y={MAP.nodes.dragon[1]+6.5} className="rt-objlabel" textAnchor="middle">드래곤</text>
+    {debug&&(['A','B'] as const).flatMap(s=>[0,1,2,3,4].map(sl=>
+     <polyline key={'p'+s+sl} ref={el=>{pathRefs.current[s+sl]=el;}} className={`rt-path rt-path-${s}`} points=""/>))}
     {(['A','B'] as const).flatMap(s=>[0,1,2,3,4].map(sl=>icon(s,sl)))}
+    {debug&&(['A','B'] as const).flatMap(s=>[0,1,2,3,4].map(sl=>
+     <text key={'a'+s+sl} ref={el=>{actRefs.current[s+sl]=el;}} className="rt-actlabel" textAnchor="middle" dy="6.4"/>))}
    </svg>
    <div className="rt-side">
     {(() => {
-     // 구조물 상태(미니맵에 아직 그리지 않는 사건의 명시적 대체 표시). 엔진 공성 사건 데이터에서만 온다.
      const st=snap.struct, dmgA=st.B.reduce((x,y)=>x+y,0)+(2-st.baseB)*2, dmgB=st.A.reduce((x,y)=>x+y,0)+(2-st.baseA)*2;
      const lbl=(arr:number[],base:number,nex:boolean)=>nex?'넥서스 파괴':`${arr.filter(v=>v>=3).length}억제 · 포탑 ${9-arr.reduce((x,y)=>x+y,0)}/9${base<2?` · 넥서스포탑 ${base}/2`:''}`;
      if(dmgA===0&&dmgB===0)return null;
@@ -124,16 +149,22 @@ export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEn
      <span className="rt-fd-t">{f.by||f.ref?`${f.by?pn(f.by,names):''}${f.by&&f.ref?' → ':''}${f.ref?pn(f.ref,names):''}`:''}</span>
      <span>{f.text}</span>
     </li>)}</ul>
+    {debug&&<div className="rt-diag">
+     <b>디버그 · 진단 {rd.diag.length}건</b>
+     <ul>{rd.diag.slice(0,12).map((d,i)=><li key={i}>{d}</li>)}</ul>
+     <small>흐린 선 = 보행 가능 영역 · 굵은 선 = 선수별 남은 경로 · 아이콘 아래 = 현재 행동</small>
+    </div>}
    </div>
   </div>
   <div className="rt-controls">
    <button onClick={toggle} aria-label={playing?'일시정지':'재생'}>{playing?<Pause size={15}/>:<Play size={15}/>}</button>
-   <button onClick={()=>setSpd(speed===1?2:1)} className={speed===2?'on':''}>{speed}×</button>
+   <button onClick={()=>setSpd(speed===1?2:speed===2?4:1)} className={speed>1?'on':''}>{speed}×</button>
    <button onClick={nextEvent} aria-label="다음 사건"><SkipForward size={15}/></button>
    <input type="range" min={0} max={rd.duration} step={0.1} value={Math.min(tDisplay,rd.duration)}
      onChange={e=>seek(Number(e.target.value))} aria-label="재생 위치"/>
-   <span className="rt-time">{mm(tDisplay)} <small>/ {mm(rd.duration)}</small></span>
+   <span className="rt-time">{mm(tDisplay*rd.scale)} <small>게임 · {speed}×</small></span>
    <button onClick={restart} aria-label="처음부터"><RotateCcw size={14}/></button>
+   <button onClick={()=>setDebug(d=>!d)} className={debug?'on':''} aria-label="디버그"><Bug size={14}/></button>
    {hidden&&<span className="rt-paused">탭 비활성 — 일시정지됨</span>}
   </div>
  </div>;

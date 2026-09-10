@@ -172,3 +172,24 @@
 - 미검증: 브라우저 육안(공성 미니맵·구조물 텍스트·t=0·탭 비활성·모바일). 구조물 SVG 아이콘 미구현. 개인 성장 곡선 없음(자원 누적만). `RES_VIS_PROTECT` 미이관. CAP 동전 소편향(전체 <0.3%p).
 - 다음 첫 행동: MATCH-SYS 단위 6 — POG를 실제 개인 기여(`combat.fight.contrib` + 공성/오브 참여) 합으로 계산. BACKLOG "단위 6" 절.
 - 배포: 안 함.
+
+## 2026-09-10 — MINIMAP-02: 지속형 에이전트 미니맵 (D016)
+- 문제(D013 재생 증상): `buildReplay`가 사건 참가자만 키프레임을 찍는 컴파일러 → 사건 전 정지, 사건에 급이동, 사건 후 홈 왕복, 다른 라인 정지, 고정 노드 왕복, 경기 시각↔재생 시각 임의 대응.
+- 체크포인트: git tag `minimap-pre-persistent` (재작성 이전 `595b3ea`). 기존 사용자 소스·이력 무변경.
+- `lib/simulation/replay.ts` 내부 완전 재작성(공개 API 유지):
+  - `WALK` 55노드 보행 그래프(MAP 세분 + 정글 캠프 + 분수대), `route` Dijkstra, `distToCorridor`/`WALL_TOL`.
+  - 10명 지속 에이전트. 고정 `DT=2.5`초 tick 루프: 부활 → 사건 해소 → 접근 계획(lead 이전) → decide → 노드 경로 이동. **사건 끝나도 위치 초기화 없음.**
+  - 역할별 지속 행동(라이너 farm zone 드리프트·왕복, 정글 캠프 순찰+접근, 서포터 원딜 zone 추종+로밍, 큰 교전 전 드리프트, 위험 시 반전 후퇴, 교전 후 홈으로 물러났다 재판단). 무작위 흔들림·원점 왕복 아님.
+  - 사건 연결: 발생 전 접근 계획 → 실제 경로. 발생 순간 순간이동 없음(근처면 그 자리, 조금 멀면 도착 시 교전, 많이 멀면 diag). 처치·승패는 엔진 데이터 그대로.
+  - `t = clock/SCALE`(18 균일) — 프레임률·배속 무관. 속도 균일(≈15~19 u/s). `RESPAWN`을 combat.ts와 동일하게 정렬.
+  - 위치 난수 `mulberry32(hashStr(setSignature))` — outcome/narration과 분리. `buildReplay` 순수·결정적.
+  - `ReplayData.nav/diag/scale`, `TrackKey.act/reason`, `stateAt.gameClock`, `agentsAt`.
+- `app/replay-theater.tsx` + `globals.css`: 디버그 토글(통로·경로·행동 라벨·diag 패널), `scatter` 표시 보정, gameClock, 1×/2×/4×.
+- 결정: D016.
+- 검증:
+  - `tests/replay.test.mjs` section 3 재작성(통로 허용치) + section 9 신설(정지 없음·경로 연속·라인 독립·diag 유한·결정성·agentsAt). 전 스위트(combat/replay/narration/ability/composition/management/engine) + tsc + build PASS.
+  - 8시드 스모크: 정지 트랙 0/10, 비-교전/사망 벽 침범 0, 결정성 100%, diag 30~90.
+  - **브라우저 육안 확인함**: dev 서버 RECAP 재생 — 00:07/00:15/09:00/13:17/13:47 각 시점 아이콘이 서로 다른 위치에서 이동, 라인·정글·집결 분산, 디버그 경로·행동 라벨·diag 패널, 클록·골드·스코어·피드 동기, t=0 정지 프레임, 재생/정지/배속/처음부터/다음사건 동작, 콘솔 오류 없음. (자동화 Chrome이 GIF 녹화했으나 파일시스템 접근 불가.)
+- 미검증/남은 것: 접근 도착 시각↔합류 판정 통합(현재 `combat.participants`가 authoritative), 한타/오브/공성 애니 타이밍 다듬기, `notJoined` 연출, 구조물 아이콘 SVG, 모바일 비율, 아이콘 클릭.
+- 다음 첫 행동: MATCH-SYS 단위 6(표시 데이터 통합) 또는 MINIMAP 접근↔합류 통합. HANDOFF "다음 첫 행동" A/B.
+- 배포: 안 함.

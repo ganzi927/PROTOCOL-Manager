@@ -1,7 +1,7 @@
 # 다음 세션 인수인계
 
-갱신: 2026-09-10 / **MATCH-SYS 단위 5 완료** (스노볼 + 구조물 기반 종료, D015) · 단위 1~4 완료 · MINIMAP-01 1단계 완료 · 다음 = MATCH-SYS 단위 6(표시 데이터 통합 — POG·골드 그래프·리캡)
-Git: 저장소 초기화됨(단위 4 = `9a15df3` 체크포인트, 단위 5 = `19e4421`, scratch 제외 = `d7a1473`). 배포 없음.
+갱신: 2026-09-10 / **MINIMAP-02 완료** (지속형 에이전트 미니맵, D016) · MATCH-SYS 단위 1~5 완료 · 다음 = MATCH-SYS 단위 6(표시 데이터 통합) 또는 MINIMAP 접근↔합류 통합
+Git: `9a15df3`(단위4 체크포인트) → `19e4421`(단위5) → `d7a1473`(scratch 제외) → `595b3ea`(단위5 문서) → MINIMAP-02는 아직 미커밋(이 세션에서 커밋 예정). tag `minimap-pre-persistent` = MINIMAP-02 이전 상태. 배포 없음.
 
 ## 현재 목표
 ABIL-01·COMP-01·CAST-01을 **하나의 경기 시스템**으로 완성한다. 중심 원칙: 엔진이 사건을 계산하고 중계·골드 그래프·POG·리캡·조합 예측이 그 결과만 사용한다. 표시용 별도 추첨 금지, 표시값 전력 이중 반영 금지.
@@ -16,8 +16,9 @@ ABIL-01·COMP-01·CAST-01을 **하나의 경기 시스템**으로 완성한다. 
 - ✅ 단위 5: 스노볼 + 구조물 기반 종료 (D015) — 실제 경기 시계, `resolveSiege`, 넥서스 파괴로만 정상 종료, 상한(CAP) 별도 사유, pressure는 tiebreak
 - ⬜ 단위 6: 표시 데이터 통합 ← **다음** — POG를 실제 개인 기여로, 골드 그래프, 리캡을 근거 사건으로
 
-**MINIMAP-01**(이동형 미니맵 중계)
-- ✅ 1단계: 지도·경로 골격 + 바텀 갱킹 연결 (D013). 단위 4로 한타 개별 처치, 단위 5로 공성 사건 + `beat.struct` + 사이드 패널 구조물 텍스트 상태.
+**MINIMAP**(이동형 미니맵 중계)
+- ✅ 1단계 (D013): 지도·경로 골격 + 바텀 갱킹.
+- ✅ **MINIMAP-02 (D016): 지속형 에이전트 재작성** — `WALK` 55노드 보행 그래프, 10명 독립 시뮬(고정 DT 간격, 노드 경로, 행동 변경마다 키프레임), `t=clock/SCALE` 균일, 위치 난수 분리. 사건 전 접근 계획→실제 경로 이동(순간이동 없음). 디버그 모드(통로·경로·행동·diag). **정지 없음·벽 침범 없음·결정성·라인 독립 활동** — replay.test PASS + 브라우저 육안 확인함.
 - ⬜ 2단계: 탑·미드 갱킹(0·1) + 오브전(3·4) + 한타 접근/보호 타이밍 다듬기, `notJoined` 연출, 구조물 아이콘 SVG 렌더
 
 **기타**: COMP-01 단계 3(조합 예측 UI)/4(AI 밴픽), 전체 밸런스 민감도 검사
@@ -27,6 +28,20 @@ ABIL-01·COMP-01·CAST-01을 **하나의 경기 시스템**으로 완성한다. 
 
 ## 게임 실행 상태
 `npm ci` 완료, 로컬 D1 마이그레이션 적용, `npm run dev` → **http://localhost:5176/** (백그라운드 실행, HMR 반영). Node v22.12.0.
+
+## 완료한 행동/파일 (MINIMAP-02 지속형 미니맵, 결정 D016)
+- `lib/simulation/replay.ts` **내부 완전 재작성**(공개 API 유지: `buildReplay`·`stateAt`·`posAt`·`MAP`·`pathBetween`):
+  - **`WALK`**(export): `MAP` 세분(각 통로 중점 `w{i}`) + 정글 캠프 `*C` 4점 + 분수대 `A_ft`/`B_ft` = 55노드 보행 그래프. `route(from,to)`=WALK adj Dijkstra. `distToCorridor(p)`·`WALL_TOL`(export) = 벽 침범 검사.
+  - **에이전트 시뮬**: 10개 `Agent{route:string[],seg,segT,fixedPos,act,speed,nextDecide,alive,respawnAt,plan,lane,jgIdx,pushBias}`. 고정 `DT=2.5`초 tick 루프. 매 tick: 부활 → 사건 해소(arm된 것 중 `clock>=ev.clock`) → 접근 계획 부여(`ev.clock-lead` 이전, lead는 참가자 최장 이동시간 기반) → `decide` → 이동(노드 단위, 여러 노드 지나면 경유 키프레임 시각 거리 비례 분산).
+  - **decide**: `a.plan`(사건 집결) > `groupSoon`(58초 내 큰 교전 참가 예정) > 역할별. 라이너 = farm zone(pushBias로 중심, 그 부근 2~3노드 왕복, zone이 라인 위를 드리프트) / 정글 = 캠프 순찰 + 오브·갱킹 접근(`pickDiff` — 현재 노드 제외) / 서포터 = 원딜 zone 한 칸 앞 지원(좌표 복제 아님) + 로밍. 정글 위험 감지 → `L.own`으로 `turn` 반전 후퇴. 교전 후 → 자기 홈으로 물러났다 `nextDecide=clock+5` 뒤 재판단.
+  - **사건 연결**: 발생 순간 `dist≤5`면 그 자리 fight / `5<d≤26`면 `arriving`(경로대로 계속 이동, 도착 시 fight) / `d>26`이면 `diag` "합류 실패". 처치·승패는 엔진 `combat` 데이터 그대로(이동 모듈은 전투 결과 안 만듦). `headTo`가 현재 구간 보존(일반=앞 노드부터 이어붙임, `turn`=구간 반전) → 역주행·순간이동 없음.
+  - **시각**: `t = clock/SCALE`(SCALE=18 균일). 위치·상태·beat·골드 모두 `t`의 함수. `RESPAWN`을 `combat.ts`와 동일하게(`10+min(42,clock/60*1.5)`) 맞춰 `notJoined` 판정 일치.
+  - **난수**: `mulberry32(hashStr(sig))`, `sig` = `events[].{index,prob,goldA,winner}` + picks. outcome/narration과 분리. `buildReplay(set)` 순수·결정적.
+  - `ReplayData`에 `nav:{segs}`(디버그 통로)·`diag:string[]`·`scale`. `TrackKey`에 `act?`·`reason?`. `stateAt`에 `gameClock`. `posAt`가 `act`/`reason` 반환·`fight` 키프레임도 정지. **`agentsAt(rd,t)`**(export) = 전 선수 pos·state·act·reason·남은 경로.
+- `app/replay-theater.tsx`: 디버그 토글(🐞) — WALK 통로(`.rt-nav`)·선수별 남은 경로(`.rt-path`)·아이콘 아래 행동(`.rt-actlabel`)·diag 패널(`.rt-diag`). 교전/사망 시 `scatter(slot)` 표시 보정(~2.4u, 논리 위치와 구분). `snap.gameClock` 사용. 배속 1×/2×/4×.
+- `app/globals.css`: `.rt-nav/.rt-path/.rt-actlabel/.rt-diag` 규칙.
+- `tests/replay.test.mjs`: **section 3 재작성**(고정 노드 → `distToCorridor` 허용치 + 0.25s step<8). **section 9 신설**(정지 없음·경로 연속·라인 독립·diag 유한·결정성·`agentsAt`). section 5는 교전 시점~창 종료만 검사.
+- 체크포인트: git tag `minimap-pre-persistent` (재작성 이전 = `595b3ea`).
 
 ## 완료한 행동/파일 (MATCH-SYS 단위 5, 결정 D015)
 - `lib/simulation/combat.ts`:
@@ -127,8 +142,10 @@ ABIL-01·COMP-01·CAST-01을 **하나의 경기 시스템**으로 완성한다. 
 - **CAP 판정 동전의 편향**: 동일 픽 CAP 게임에서 A승 ~40%(n≈250). CAP가 "A가 못 끝낸" 게임이라 A가 약간 뒤진 상태로 선택되는 순환. CAP는 3~4%뿐이라 전체 승률 영향 <0.3%p. 후속에서 tiebreak 재검토 가능.
 - **작은 강화 효과는 확정 아님**: SUP VIS+20 등은 teamfight-review CI가 0을 배제해도 balance-review(다른 RNG 스트림)에선 부호가 흔들린다. 견고: 큰 효과(ADC CAR·SUP TF·팀+10)와 행동 지표(딜러 생존·보호 성공·오브 확보·첫 구조물).
 - `powersA/powersB`는 D008에서 조합 항 제외.
+- **MINIMAP-02**: 접근 도착 시각은 아직 합류 판정에 반영 안 됨(`combat.participants`가 authoritative). far-lane 정글 갱킹·후반 한타에서 `diag` "합류 이동/지연" 30~90건(대부분 소폭). 구조물 아이콘 SVG 미구현. 모바일 비율·아이콘 클릭 육안 미확인. 자동화 Chrome이 녹화한 GIF는 이 파일시스템에서 접근 불가.
 
-## 다음 첫 행동 — MATCH-SYS 단위 6 (표시 데이터 통합)
+## 다음 첫 행동 — MATCH-SYS 단위 6 (표시 데이터 통합) 또는 MINIMAP 접근↔합류 통합
+### A. MATCH-SYS 단위 6 (BACKLOG "단위 6" 절)
 BACKLOG "단위 6" 절에 6단계 상세. 요지: **POG를 실제 개인 기여로 계산**한다.
 1. `SetResult`에 슬롯별 세트 기여 집계 추가 = Σ(`combat.fight.contrib`) + 공성 참여(`combat.siege.participants`) + 오브 참여 + 갱킹 킬/어시. **재추첨·재계산 없이 합**(사건 데이터에 이미 있음).
 2. POG = 승리 팀 최댓값 슬롯. 동점은 kill 관여 → protect 성공 → 생존. 역할 고정 점수만으로 뽑지 않음. 이유 문자열을 실제 사건과 연결.
@@ -137,13 +154,17 @@ BACKLOG "단위 6" 절에 6단계 상세. 요지: **POG를 실제 개인 기여�
 5. 리캡: 근거 사건(반전 beat·첫 구조물·넥서스)으로. 미계산 % 설명 금지.
 6. 검증: 결정성, POG 이유 = 실제 사건, 역할 편향 없음(통제 실험 슬롯별 POG 분포), 골드 그래프 = 중계 골드.
 
+### B. MINIMAP: 접근 도착 ↔ 합류 판정 통합
+`lib/simulation/replay.ts`는 이미 사건별 참가자 이동 도착 시각(`eta`)을 계산해 `diag`에 남긴다. 다음 단계는 이 도착 시각을 **합류 판정에 연결**하되, 엔진 능력치 기반 판단(`resolveObjective`의 `arriveP`, `resolveTeamfight`의 `numAdvFav`)과 **독립 확률을 두 번 적용하지 않게** 한다. 결과가 바뀌는 부분(어느 사건이 어느 참가자를 잃는가)을 명시 기록하고 combat.test/teamfight-review로 재측정. 처치·승패 계산은 combat 모듈 유지 — 이동 모듈이 별도 전투 결과를 만들지 않는다.
+
 ## 재현 시드/경로
 - combat 샘플: `newGame('nva',7)` → `upgradeGame` → `g.seed=<n>` → `simulateSet(g,{a:'nva',b:'crn',...})`. `r.endReason`('NEXUS'|'CAP'), `r.events[i].combat`.
 - **공성/종료(단위 5)**: 통제 base(전스탯70) + `structuredClone` + `g.seed=<seed>`. `tests/teamfight-narration-examples.mjs` 실행 → NO_WINDOW/INHIB/NEXUS/CAP/TRADE 각 사례 + 재현 시드 출력. `resolveSiege` 직접 호출: `mkState`(combat.test 섹션 7) + `s.clock`·`s.struct.B`·`s.baseTurrets.B` 설정 + `s.B[sl].alive=false; respawnAt=...`(창 조절).
 - **한타(단위 4)**: seed 0 #7 = 보호 성공→A-ADC 생존, seed 6 #5 = edgeA=A인데 winner=B, seed 50 #8 = TRADE.
 - 실험 하네스: `node --experimental-strip-types tests/teamfight-review.mjs 8000`(단위 4·5 지표 + 페어 95% CI). `tests/balance-review.mjs`. 임시 대칭 체크: 동일 픽으로 `simulateSet` N회.
 - 결정성: 같은 seed 2회 `JSON.stringify(simulateSet)` 동일.
-- 미니맵 재생: `buildReplay(simulateSet(g,m))` → `rd`. `stateAt(rd,t).struct` = 그 시점 구조물 상태.
+- 미니맵 재생: `buildReplay(simulateSet(g,m))` → `rd`. `stateAt(rd,t)` = 점수·골드·피드·중계·구조물·gameClock. `posAt(rd.tracks[k],t)` = 위치·state·act·reason. `agentsAt(rd,t)` = 전 선수 pos·act·reason·남은 경로(디버그). `rd.diag` = 이동↔사건 일정 진단. `rd.nav.segs` = WALK 통로.
+- MINIMAP 검증: `replay.test`(section 9 = 정지 없음·경로 연속·라인 독립). 임시 스모크: `buildReplay(set)` 두 번 `JSON.stringify` 동일(결정성), 트랙별 `posAt`를 0.4s 간격 샘플 → 이동 프레임 >35%·`distToCorridor ≤ WALL_TOL+1.2`. 브라우저: dev 서버(`localhost:5176`) RECAP, 디버그 토글(🐞)로 경로·행동·diag 확인.
 
 ## 작업 경계
 라이브 배포 없음. Claude 연결 계정 없음. 세이브 삭제/마이그레이션 수정 없음. package.json/lockfile 변경 없음(`npm ci`만). 과거 완료 경기를 새 엔진으로 재계산하지 않음.

@@ -9,7 +9,7 @@
 | ABIL-01 | P1 | IN_PROGRESS | 선수 능력치의 경기 영향 개선. 1단계(라인·시야→개인 자원→후속 전투 전력) 완료 (2026-09-10, D007). 다음: Phase 3~5 |
 | COMP-01 | P1 | IN_PROGRESS | 조합 승률·메타·AI 밴픽 확장(PROTOCOL-Composition-Meta-Design.md). 단계 2 첫 슬라이스(조합 프로필→구간 효과, 단일 경로) 완료 (2026-09-10, D008). 다음: 단계 3~6 |
 | CAST-01 | P1 | IN_PROGRESS | 구조화된 중계. 1차(사건 기억·준비 beats·강도 tier·감독 레버·밀도 토글) 완료 (2026-09-10, D009). 다음: 참여자 상세·다중 조합 콜백·리캡 확대 |
-| MINIMAP-01 | P1 | IN_PROGRESS | 실제 경기 사건과 동기화된 이동형 미니맵 중계. 1단계(지도·경로 골격 + 바텀 갱킹 연결) 완료 (2026-09-10, D013). 다음: 탑·미드·오브전 사건 연결. 아래 "MINIMAP-01" 절 참조 |
+| MINIMAP-01/02 | P1 | IN_PROGRESS | 이동형 미니맵. 1단계(D013)·지속형 에이전트 재작성(MINIMAP-02, D016) 완료. 다음: 접근 도착↔합류 판정 통합, 탑·미드·오브·공성 애니 다듬기. 아래 "MINIMAP-01" 절 참조 |
 | MATCH-SYS | P1 | IN_PROGRESS | ABIL-01·COMP-01·CAST-01을 하나의 경기 시스템으로 통합. 단위 1(D010)·2(D011)·3(오브전+wa, D012)·4(참여자 한타, D014)·5(스노볼+구조물 종료, D015) 완료. 다음: 단위 6(표시 데이터 통합 — POG·골드 그래프·리캡). 아래 "MATCH-SYS" 절 참조 |
 | SAVE-01 | P1 | TODO | v1/v2와 서로 다른 v3 형태의 마이그레이션 검증 |
 | DRAFT-01 | P2 | TODO | 선택/스왑 후 선수별 정확한 보정 표시 |
@@ -114,13 +114,19 @@
 - `app/manager.tsx` RECAP 배선: `onProgress`로 텍스트 로그 공개를 미니맵 시계와 동기화. 기존 `setTimeout` 공개·`speed`·`결과 보기` 제거(스포일러 방지).
 - 검증: `tests/replay.test.mjs` PASS. 실제 RECAP 화면 육안 확인(이동·스컬·점수/골드 진행·피드·컨트롤).
 
+### MINIMAP-02 — 지속형 에이전트 재작성 · 완료 (2026-09-10, D016)
+- `lib/simulation/replay.ts` 내부 완전 교체: `WALK` 보행 그래프(55노드) + `route`(Dijkstra) + `distToCorridor`. 10명 지속 에이전트 시뮬(고정 `DT=2.5`초 간격, 노드 경로 이동, 행동/경로 변경마다 키프레임). 재생 시각 `t = clock/SCALE`(균일 18배) — 프레임률·배속이 판단에 영향 없음, 속도 폭증 없음.
+- 역할별 지속 행동: 라이너 farm zone 드리프트·왕복, 정글 캠프 순찰+오브/갱킹 접근, 서포터 원딜 zone 추종(좌표 복제 아님)+로밍, 큰 교전 전 드리프트, 정글 위험 시 반전 후퇴. 사건 발생 전 접근 계획→실제 경로 이동, **순간이동 없음**(근처면 그 자리, 조금 멀면 계속 이동해 도착 시 교전, 많이 멀면 diag). 처치·승패는 엔진 데이터 그대로.
+- 위치 난수 = `mulberry32(hashStr(setSignature))` (SetResult 내용에서만), outcome/narration과 분리. `buildReplay` 순수·결정적.
+- `app/replay-theater.tsx`: 디버그 토글(통로·경로·행동 라벨·diag), `scatter` 표시 보정, `gameClock`, 1×/2×/4×. `ReplayData`에 `nav`·`diag`·`scale`, `TrackKey.act/reason`, `stateAt.gameClock`, `agentsAt`.
+- 검증: `replay.test` section 3 재작성·section 9 신설. 8시드: 정지 트랙 0/10, 벽 침범 0, 결정성 100%. **브라우저 육안 확인함**(RECAP 재생, 시점별 아이콘 분산·이동·경로·행동 라벨·동기·t=0 정지·컨트롤, 콘솔 오류 없음).
+
 ### 남은 작업
-- **탑·미드 갱킹(0·1) 상세 연결**: 정글 접근 경로, 라이너 대치, 처치/탈출/무산을 combat 상태로. (현재 위치·처치·불참은 나오되 접근 애니메이션은 정글만 간단)
-- **오브전(3·4) 상세 연결**: 실제 합류자 경로(전령=정글·탑·미드, 드래곤=정글·미드·원딜·SUP), 대치→확보/미확보/역확보, `notJoined` 이유별 연출.
-- **한타(5~8)**: 단위 4 완료로 `resolveTeamfight`가 참여자·개별 처치(victim/killer/assists)·`notJoined`를 준다. `buildReplay`가 이제 combat 경로로 개별 스컬·처치 beat를 찍는다(replay.test 통과). 남은 것: 한타 진입/보호/후퇴 애니메이션 타이밍을 갱킹·오브 수준으로 다듬기, `notJoined`(리스폰 대기) 연출, 구조물(단위 5) 표시.
-- 부활 시각을 `combat.RESPAWN` 실값과 정확히 일치(현재 `respawnEngine` 근사).
-- t=0 정지 화면·탭 비활성 일시정지·모바일 지도 비율 육안 확인.
-- 미니맵 아이콘 클릭 → 선수 상세(배선은 있음, `onSelectPlayer`), 팀 테두리·선택 정보 육안 확인.
+- **접근 도착 시각 ↔ 합류 판정 통합**: 현재는 엔진 `combat.participants`가 authoritative(결과 불변). 실제 이동 도착 시각을 합류 판정에 연결하는 단계 — 기존 능력치 기반 판단과 독립 확률 이중 적용 없이. 결과가 바뀌는 부분을 명시 기록.
+- 한타/오브/공성 사건의 진입·보호·후퇴·철수 애니메이션 타이밍을 갱킹 수준으로 다듬기, `notJoined`(리스폰 대기) 별도 연출.
+- 구조물 아이콘 SVG 렌더(현재 사이드 패널 텍스트만).
+- diag의 "합류 이동"/"이동시간 부족" 항목 줄이기(초반 far-lane 정글 갱킹, 후반 한타 lead 튜닝).
+- 모바일 지도 비율·아이콘 클릭→선수 상세 육안 확인.
 
 ## COMP-01 — 조합 승률·메타·AI 밴픽 확장
 근거: `docs/claude/PROTOCOL-Composition-Meta-Design.md`(6단계). `PROTOCOL-Ability-Review.md`(ABIL-01)와 함께 진행. 회귀: `tests/composition.test.mjs`, 민감도는 `tests/balance-review.mjs`(조합 무관 = 불변이어야) + 임시 comp 측정 스크립트.

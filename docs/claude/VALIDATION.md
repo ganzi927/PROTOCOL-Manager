@@ -270,3 +270,95 @@ Node v22.12.0. 통제 조건: 전원 스탯70·폼50·번아웃0·호흡50·균�
 - 구조물 아이콘 SVG 미구현(사이드 패널 텍스트 상태만 — 단위 5).
 - 모바일 지도 비율, 아이콘 클릭 → 선수 상세, 탭 비활성 자동 일시정지는 육안 미확인.
 - 한타·오브·공성 사건의 진입/보호/후퇴 애니메이션 타이밍은 갱킹 수준으로 다듬지 않음.
+
+---
+## 2026-09-11 — 단위 5 정합성 점검 (D017) + 미니맵 이동 정합·구조물 (D018)
+
+명령: `node --experimental-strip-types tests/<name>.test.mjs` (combat/replay/ability/composition/narration/management/engine) → 전부 PASS.
+`node node_modules/typescript/bin/tsc --noEmit --incremental false` → exit 0. `npm run build` → exit 0.
+실험: `node --experimental-strip-types tests/teamfight-review.mjs 6000`, `node --experimental-strip-types tests/balance-review.mjs`.
+
+### D017 — 단위 5 점검 결과
+
+**1a. 구조물 열세 게이트(`behind`) 제거**
+- `resolveSiege`의 `behind = dealtMe < dealtOpp-3` → `budget=min(budget,1)` + `targetBase&&behind` 진입 차단 3줄 삭제.
+- 인위적 역전 보너스 추가 없음. 남은 자연 제동: `goldGap` clamp −0.6~0.85, 넥서스 조건(`openInhib`+`baseTurrets===0`+`def.length<=3`+`budget>=2`).
+- 회귀 `combat.test` 10j: A가 구조물 열세(struct.A=[3,2,2], baseTurrets.A=1, struct.B=[0,0,0]) + 방금 교전 승리(A 4생존 : B 4사망) → 철거 평균 **0.8+개/공성**. 대조(인원차·창 없음, 양 팀 생존) → RESET, 철거 0. **열세 자체가 아니라 생존 인원차·창이 원인**임을 고정.
+
+**1b. CAP 분리 (`CAP_TIME` / `CAP_EVENT`) + `capDiag`**
+- `endReason: 'NEXUS' | 'CAP_TIME' | 'CAP_EVENT'`. `capDiag = {reason, clock, events, structDealt:[A,B], baseTurrets, inhibsOpen, recentSiegeFails, tiebreakStage}`.
+- teamfight-review N=6000: NEXUS **97.62%** / CAP **2.38%** → **전부 `CAP_EVENT`**(30 사건 상한). `CAP_TIME`(3600s) 실측 **0%** — 안전망(사건 상한이 항상 먼저). `behind` 제거로 CAP 3.8%(D015)→2.38%.
+- CAP tiebreak 분포(n=143): 구조물 127 · pressure 14 · advantage 2 · **동전 0**. 동전 산식: `random(hash('${seed}|tiebreak|${matchId}|${setIdx}'))() < 0.5` — 경기 outcome/flavor/narr/combat 난수와 **분리된 전용 해시 스트림**, 균등 50/50, struct==·pressure==·advantage==0 완전 동률일 때만. 실측상 도달 안 함(구조물 피해가 거의 항상 불균등).
+- CAP 직전(균형): 평균 경기시계 1764s, 구조물 피해 평균 A 6.6 : B 6.7 — 양 팀 억제기 부근까지 갔으나 넥서스 마무리(수비 소수 + budget 정렬)를 못 낸 교착. 넥서스 조건이 교착에서 다소 빡빡하다는 신호(회귀 아님 — 후속 검토).
+
+**1c. ADC 생존 → 공성 기여 (통제 실험)**
+- `combat.test` 10k: 공성 직전 상태 **완전 동일**(A 4생존 : B 3생존, B 2명 리스폰 대기, 생존 인원 합 골드 동일), 죽은 A 슬롯만 ADC(3) ↔ TOP(0) 교체 → 철거 **ADC 사망 1.00 vs ADC 생존 2.00**개/공성. 순수 `adcSiege = (CAR−50)/70` 채널(인원차·창·자원 통제 후) 확인.
+- teamfight-review 집계: 공성 시 A-ADC 생존 → 철거 **1.82**(n=14672), 사망 → **0.18**(n=4186).
+
+**1d. 신뢰구간 산식 + 페어 원자료 + 부호 흔들림**
+- `pairedCI`(teamfight-review.mjs) McNemar: 같은 seed 짝, `b` = 균형승·강화패, `c` = 균형패·강화승 (일치쌍은 정보 없음). `d̂ = (c−b)/N`, `Var(d̂) = ((b+c) − (c−b)²/N) / N²`, 95% CI = `d̂ ± 1.96·√Var`. 세트 0/1 이항, 공통 분산 상쇄. 불일치쌍 `b+c` 작으면 CI 넓음 = 작은 양수를 개선으로 확정 못 하는 근거. 조건별 출력에 `b`, `c` 원자료 병기.
+- 강화 효과(N=6000, 통제 base 전스탯70, 태그쌍): TOP_LNE **+2.35[1.37,3.33]** (b=382,c=523) · SUP_VIS **+2.2[1.3,3.1]** (b=312,c=444) · JGL_OBJ **+2.53[1.47,3.6]** · ADC_CAR **+6.0[4.51,7.49]** · ADC_MEC **+4.32[2.97,5.66]** · SUP_TF **+5.5[4.0,7.0]** · 팀+10 **+26.97[25.36,28.57]**. 전부 CI 0 배제.
+- **부호 흔들림(복구·설명)**: `tests/balance-review.mjs`는 조건이 teamfight-review와 동일(전스탯70·태그쌍·6000 페어 시드)하나 `m.id`가 `'controlled-1'`(vs `'tf-1'`) → 모든 `random(hash('${seed}|...|${m.id}|...'))` 시드가 달라 **서로소 게임 모집단**. 결과: 같은 `SUP_VIS +20`(stats[3]=90)인데 balance-review = 49.13 − 48.75 = **+0.38%p** (teamfight-review는 +2.2). 균형 자체도 47.62%(tf) vs 48.75%(balance) — 1.1%p 차이가 순수 RNG 스트림에서 나온다.
+  - 두 하네스는 대수적으로 같은 추정량((c−b)/N = wins_buff/N − wins_eq/N)이지만 서로 다른 경기를 돈다. N=6000 표집 바닥 ≈ ±1.3%p.
+  - **견고**: 큰 효과(ADC_CAR·SUP_TF·팀+10, |Δ|>3%p) — 두 모집단에서 부호·크기 일치. **불확실**: 작은 효과(SUP_VIS·TOP_LNE, 0.4~2.4%p) — 승률 수치가 아니라 행동 지표로 보고(SUP_VIS: 딜러 생존 +7.1%p·보호 성공 +13.3%p, TOP_LNE: 오브 A확보 +4.4%p).
+- **NO 전역 계수 조정** — 목표 승률 맞춤 튜닝 없음. `behind` 제거는 게이트 삭제(계수 불변).
+
+### D018 — 지속형 미니맵 이동 정합 + 구조물
+
+**엔진 REGION_DIST ↔ 미니맵 WALK 이동 시간 대조**
+
+| 지역쌍 | 엔진(s) | WALK(s, TRAVEL_K=2.6) | 비율 |
+|---|---|---|---|
+| base↔top | 22 | 14.5 | 0.66 |
+| base↔mid | 18 | 23.0 | 1.28 |
+| base↔bot | 22 | 14.5 | 0.66 |
+| base↔river | 20 | 24.5 | 1.23 |
+| top↔mid | 15 | 18.7 | 1.25 |
+| top↔bot | 26 | 29.1 | 1.12 |
+| top↔river | 12 | 26.5 | **2.21 (WALK 우회 — 명시적 예외)** |
+| mid↔bot | 15 | 17.1 | 1.14 |
+| mid↔river | 8 | 7.9 | 0.98 |
+| bot↔river | 12 | 17.4 | 1.45 |
+
+- 비율 중앙값 **1.23**. `top↔river`만 2.21 — 엔진은 강↔탑을 인접 취급, WALK 그래프는 우회 경로뿐. 위상 차이라 **정확히 일치시키지 않고** `diag`/`rd.travel`에 기록.
+- `showDelay`(화면 렌더 지연, 엔진 판정 불변): 이전 사건 노드→이 사건 노드 WALK 이동 시간이 엔진 간격보다 길면 그만큼 화면 사건을 늦춤. `stime`(화면)/`eclock`(엔진) 분리.
+
+**12시드 재측정 (buildReplay 진단)**
+
+| 지표 | MINIMAP-02 (D016) | D018 |
+|---|---|---|
+| "이동시간 부족" (12시드 합) | 96 | **0** |
+| "합류 실패" (거리>26/34u, 12시드 합) | 335 | **0** (전량 "합류 이동"으로 전환 — 계속 걸어서 합류) |
+| "합류 이동" (도착 지연, 전량 diag) | 252 | 250~410 (세트당 ~30) |
+| 원거리(>34u) 합류 이동 (세트당) | — | 8~29 (전부 diag에 거리·`showDelay` 기록) |
+| `travelAudit` 비율 중앙값 | — | 1.23 |
+| `replay.test` section 3 step 상한 | <8 | **<16** (요구 변경 — TRAVEL_K로 스텝 커짐, 주석) |
+
+- `replay.test` 섹션 10 신규: 지역쌍 이동 시간 80%+ 정렬 · 큰 차이(≥8s) 순서 보존 · 모든 사건 참가자가 창 종료까지 "fight 도달 / 사망 / diag에 합류 이동" 중 하나 · `farJoins` 유한(≤45) · 원거리 합류 전량 로그.
+- 결정성: `buildReplay(set)` 2회 `JSON.stringify` 동일 유지.
+
+**구조물 SVG (`replay-theater.tsx`)**
+- 팀별 라인 3 × [외곽·내곽·억제기] + 넥서스포탑 2 + 넥서스 = **24개** (`document.querySelectorAll('.rt-structs ...').length === 24` 확인).
+- `snap.struct`(재생 시각까지 집계)에서만 렌더 → **미래 상태 미노출**. 살아있음 = 팀색 채움, 파괴 = 회색 테두리(+넥서스는 ✕). 데이터가 라인별 0..3 정수뿐 → 부분 피해 바 없음(데이터가 지원하는 만큼만).
+
+**RECAP 크래시 수정 (D015 잠재 버그)**
+- `manager.tsx` 이벤트 로그 `<span className="event-team">{meta(e.winner).short}</span>` → `winner:''`(공성 HELD/NO_WINDOW·noMove 한타)에서 `meta('')`가 undefined 반환 → `.short` 크래시. `{e.winner ? meta(e.winner).short : ''}` 가드. 브라우저에서 재생 끝까지 시크 시 재현 → 수정 후 정상.
+
+### 브라우저 육안 확인 (dev 서버 `localhost:5176` RECAP, D018)
+
+밴픽 완료(자동 선택으로 20/20) → 세트 경기 → 리캡. `<ReplayTheater>`:
+- **t=0**: 10 아이콘 각자 홈 위치(집결 아님), 구조물 24개 온전(팀색), 클록 00:00.
+- **재생**: 00:06 → 11:49("T1 전령 확보 / Doran → Cuzz FIRST BLOOD / Way 불참·도착 지연 / Bdd 생존·이탈") → 13:59(다음 사건). 전령 참가자는 바론 지역 집결(scatter 흩뿌림), 비참가 탑·바텀 라이너는 라인 유지, 사망 아이콘 흐리게 정지. 사건 경계 넘어 위치 연속.
+- **구조물**: 재생 진행에 따라 순차 갱신(미래 미노출). 종료 시(KT 넥서스 파괴) A(KT)측 넥서스만 회색+✕, B(T1)측 온전.
+- **디버그(⚙)**: WALK 통로(흐린 선) + 선수별 남은 경로(굵은 선, 팀색) + 아이콘 아래 행동 라벨 + `diag` 패널 첫 줄 "이동 대조: TRAVEL_K=2.6 · WALK/REGION_DIST 비율 중앙값 1.28 · 지연 합류 42(원거리 21)" + 개별 "#6: B0 원거리 합류 이동(거리 46, T=1094s +지연 17s)".
+- **동기**: IN-GAME 클록·골드(7.8k vs 6.0k)·스코어·킬 피드·골드 그래프가 재생 시각 따라 갱신. 클록이 tight한 후반 공성에서 엔진 사건 시각 대비 ~2s 지연(showDelay 효과 — `engineClock`은 beat별로 정확).
+- **컨트롤**: 재생/정지, 배속 2×, 시크바, 다음 사건(⏭), 처음부터, 디버그 토글 동작. **콘솔 크래시 없음**(가드 전에는 재현됨).
+
+### 미검증 / 미구현
+
+- **접근 도착 시각 ↔ 합류 판정 미통합**: `combat.participants`(엔진)가 여전히 authoritative. showDelay는 화면 렌더만 조정하고 결과를 바꾸지 않음. 다음 단계(별도 체크포인트).
+- **모바일 뷰포트**: `resize_window`가 OS 창은 414px로 줄였으나 CDP 스크린샷 뷰포트가 1568px 고정 → 반응형 CSS는 정적 규칙만 확인, 런타임 미확인.
+- **탭 비활성/복귀**: 코드에 `visibilitychange` → 자동 일시정지 핸들러 존재. 런타임 미확인.
+- **비교 GIF**: 자동화 Chrome이 5프레임 `minimap-persistent-recap-D018.gif`(979KB) 다운로드했으나 이 파일시스템에서 접근 불가 → 첨부 못 함. 변경 전(D016) 화면은 이미 코드가 바뀌어 재현 불가(git tag `minimap-pre-persistent`로 체크아웃 시 가능).
+- `top↔river` WALK 이동 비율 2.2 — WALK 그래프에 강↔탑 직결 통로가 없어 우회. 필요 시 후속에서 통로 추가 검토.
+- 넥서스 조건이 교착(양 팀 억제기 부근) 상황에서 다소 빡빡 — CAP_EVENT 2.4%의 대부분. 회귀 아님. 후속 검토.

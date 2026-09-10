@@ -325,5 +325,89 @@ combat 한 곳에서만: 처치 골드(참여자) + 어시스트 골드(실제 �
 
 관련: MINIMAP-02, MINIMAP-01, MATCH-SYS. 후속: 접근 도착 시각을 합류 판정에 통합(기존 능력치 판단과 이중 없이), 탑·미드·오브·공성 사건 애니메이션 다듬기, 구조물 아이콘 SVG.
 
+## D017 — MATCH-SYS 단위 5 정합성 점검: 구조물 열세 게이트 제거 + CAP 분리
+
+2026-09-11. 근거: 사용자 요청(단위 6 앞선 단위 5 점검). 별도 체크포인트로 커밋 `7167829`.
+
+### 문제
+1. `resolveSiege`에 `behind = dealtMe < dealtOpp-3`(구조물 격차 −4) 조건이 있어, 구조물에서 뒤진 팀은 `budget=min(budget,1)`으로 견제만 하고 `targetBase&&behind`면 베이스 진입 자체가 막혔다 — **구조물 열세 자체가 공성 금지 조건**. 열세팀이 유리한 교전(5v0)을 이겨도 구조물을 못 밀었다.
+2. CAP(상한 종료)이 `endReason:'CAP'` 하나로, 시간 상한/사건 상한 구분·직전 상태·실패 사유 집계 없음. CAP 승자 동전의 편향·산식 미기록.
+3. ADC 생존→공성 기여가 teamfight-review 집계로만 확인됨(같은 상태에서 ADC만 바꾼 통제 실험 없음).
+4. 강화 효과 신뢰구간 산식·페어 원자료가 코드에만 있고 문서에 없음. "부호가 흔들린다"는 다른 실험(balance-review)의 조건·결과 미기록.
+
+### 선택
+1. **`behind` 게이트 완전 제거**(`dealtMe`/`dealtOpp` 포함). 공성 가능량은 `capacity`(생존 인원차·이동/부활 창·자원차 clamp −0.6~0.85·공성 능력·생존 ADC CAR·운영 주도권)에서만. 인위적 역전 보너스는 **추가하지 않음**. 자연 제동만 유지: `goldGap` 하한 −0.6, 넥서스는 `openInhib`(직전 사건 억제기)+`baseTurrets===0`+`def.length<=3`+`budget>=2` 필요 → 한 교전으로 자동 역전 불가.
+2. `endReason` → `'NEXUS'|'CAP_TIME'|'CAP_EVENT'`. `CAP_TIME`=`cs.clock>=CLOCK_CAP`(3600s), `CAP_EVENT`=`ei>=EVENT_CAP-1`(30). `SetResult.capDiag={reason,clock,events,structDealt:[A,B],baseTurrets,inhibsOpen,recentSiegeFails(최대5),tiebreakStage}`. tiebreak: `struct(구조물 피해 우위) > pressure > advantage > 동전`. 동전 = `random(hash(seed|tiebreak|matchId|setIdx))` — 경기 outcome 난수와 **분리된 전용 해시 스트림**, 50/50, 위 3단계 완전 동률일 때만.
+3. `combat.test` 10j(구조물 열세팀이 교전 승리 후 철거 — 회귀), 10k(공성 직전 상태 완전 동일, 죽은 A 슬롯만 ADC↔TOP — 순수 `adcSiege` 채널 통제 실험), 10i(capDiag 계약).
+4. `teamfight-review.mjs`: CAP 시간/사건 분리·tiebreak 분포·CAP A승률·동전 A승률 집계. `pairedCI`에 McNemar 산식 주석(b=균형승·강화패, c=균형패·강화승, d̂=(c−b)/N, Var=(b+c−(c−b)²/N)/N², 95%CI=d̂±1.96√Var) + 페어 원자료(b,c) 출력.
+
+### 이유
+- 사용자 지시: "구조물 열세 자체가 공성 금지 조건이면 제거한다. 생존 공격자·수비자·이동 시간·부활 시간·라인 상태로 판단한다." `capacity`가 이미 그 요소들로 구성 → 게이트는 중복 억제였다.
+- "단순히 상한을 늘리거나 철거 계수를 높여 숨기지 않는다" → EVENT_CAP·계수 불변, 분리·집계만.
+
+### 영향
+- `lib/simulation/combat.ts` `resolveSiege`: `behind` 3줄 제거. `REGION_DIST`/`regionTime` export(미니맵 대조용, D018).
+- `lib/game.ts`: `SetResult.endReason` 타입 + `capDiag`. `simulateSet` CAP 블록 재작성. `CapDiag` 타입 export.
+- `tests/combat.test.mjs` 10i 재작성 + 10j·10k 신규. `tests/ability.test.mjs` endReason 문자열. `tests/teamfight-review.mjs` CAP 지표.
+
+### 검증 (teamfight-review N=6000, 통제 base 전스탯70·태그쌍)
+- 정상(NEXUS) **97.62%** / 상한(CAP) **2.38%** — 전부 `CAP_EVENT`(시간 상한은 실측 0%, 안전망). `behind` 제거로 CAP 3.8%(D015)→2.38%(열세팀이 공성으로 마무리 가능해짐, 인위적 보너스 없음).
+- CAP tiebreak: 구조물 127 / pressure 14 / advantage 2 / **동전 0**(n=143). 동전은 실측상 도달 안 함(구조물 피해가 거의 항상 불균등). CAP 직전 평균 경기시계 1764s, 구조물 피해 A 6.6 : B 6.7(양 팀 억제기 부근에서 넥서스만 못 낸 교착).
+- ADC 통제 실험(10k): 공성 직전 상태 동일, 죽은 슬롯만 ADC↔TOP → 철거 **ADC 사망 1.00 vs ADC 생존 2.00**개/공성. teamfight-review 집계: A-ADC 생존 1.82(n=14672) vs 사망 0.18(n=4186).
+- 강화 효과(동일 시드 페어, 95% CI): TOP_LNE +2.35[1.37,3.33] · SUP_VIS +2.2[1.3,3.1] · JGL_OBJ +2.53[1.47,3.6] · ADC_CAR +6.0[4.51,7.49] · ADC_MEC +4.32[2.97,5.66] · SUP_TF +5.5[4.0,7.0] · 팀+10 +26.97[25.36,28.57]. 전부 CI 0 배제.
+- **부호 흔들림(balance-review N=6000, `m.id='controlled-1'` — 다른 해시 스트림 → 서로소 게임 모집단)**: 같은 +20 단일 스탯 버프인데 SUP_VIS20 = 49.13−48.75 = **+0.38%p**(teamfight-review는 +2.2). 균형 자체도 두 하네스에서 47.62% vs 48.75%(1.1%p 차, 순수 RNG 스트림). ⇒ 두 하네스는 대수적으로 같은 추정량이지만 `m.id`가 모든 `random()` 시드를 바꿔 서로 다른 경기를 돌린다. **큰 효과(ADC_CAR·SUP_TF·팀+10, |Δ|>3%p)는 두 모집단에서 부호·크기 일치. 작은 효과(SUP_VIS·TOP_LNE ≈ 0.4~2.4%p)는 N=6000 표집 바닥(~±1.3%p)에 걸려 크기 불확실 → 승률 수치가 아니라 행동 지표(딜러 생존 +7.1%p·보호 성공 +13.3%p)로 보고.**
+
+### 대안
+- `behind`를 유지하되 완화: 기각(사용자 명시 — 게이트 자체 제거).
+- `endReason:'CAP'` 유지 + capKind 서브필드: 기각, 정직한 분리가 낫고 테스트 3곳뿐.
+- EVENT_CAP 상향으로 CAP율 낮추기: 기각(사용자 명시 금지).
+
+관련: MATCH-SYS 단위 5(D015), 단위 6.
+
+## D018 — 미니맵 이동 시간 ↔ 엔진 REGION_DIST 정합 + 구조물 SVG + RECAP 크래시 수정
+
+2026-09-11. 근거: 사용자 요청(단위 6 앞선 지속형 미니맵 정합성 + 구조물 표시). 커밋 `9e2ac06`.
+
+### 문제
+1. **"논리상 도착했는데 화면에서는 이동 중" 모순**: MINIMAP-02 검증 결과, 사건 시각에 참가자가 사건 노드에 없는 경우가 12시드 212사건 중 523건, `diag` "합류 실패(거리 >26u)" 12시드 335건. 원인: (a) 미니맵 WALK 이동 속도가 엔진 REGION_DIST 대비 ~3.2배 느림, (b) 엔진이 한타 14s 뒤에 공성을 붙이는데 미니맵은 라인 이동에 그보다 오래 걸림, (c) `plan` 재배정이 늦은 사건으로 덮어써 이른 사건 참가자가 이탈, (d) 한타 정지 창(`tail`)이 다음 사건보다 길어 참가자가 묶임.
+2. 구조물이 미니맵에 안 그려짐(D015에서 사이드 패널 텍스트로만 대체).
+3. (발견) RECAP 이벤트 로그가 `winner:''`(공성 HELD/NO_WINDOW·noMove 한타)에서 `meta('').short` 크래시 — D015부터의 잠재 버그.
+
+### 선택
+1. **`REGION_DIST`/`regionTime`를 `combat.ts`에서 export** → `replay.ts`가 단일 출처로 대조. `travelAudit()` export(지역쌍별 엔진 초 vs WALK 초 vs 비율).
+2. **`TRAVEL_K=2.6`**: 에이전트 속도에 곱해 미니맵 이동 시간을 엔진 표 크기에 정렬(실측 중앙값 정렬). 두 모델은 위상이 달라(엔진은 강↔탑 인접, WALK는 우회) **정확히 일치시키지 않고** 잔차(비율 중앙값 ~1.2)는 `diag`/`rd.travel`에 기록. **순간이동·과속으로 숨기지 않는다**(사용자 지시).
+3. **`showDelay`(화면 렌더 지연)**: `stime = eclock + showDelay`. `showDelay = clamp(walkSeconds(이전 사건 노드→이 사건 노드)·1.2 + 10 − 엔진 간격, 0, 34)`. 화면에서 사건을 그만큼 늦춰 참가자가 순간이동 대신 실제로 걷는다. **엔진 판정·`engineClock` 불변** — `eclock`(엔진, 모든 `engineClock` 필드·골드 조회)과 `stime`(화면, 모든 `t=T(...)` 타임스탬프·창·해소 게이트) 분리.
+4. **계획 재배정**: 사건 종료 시 참가자를 다음 armed 사건으로 재계획(한타→공성 14s 사이에도 미리 이동 시작). `fightUntil`/`arriving` 중인 에이전트는 재계획·이동 지시 **금지**(같은 tick에 교전 키프레임과 이동 키프레임이 충돌해 `emit` dedup이 앞 키프레임을 덮어쓰는 것 방지). `tail`을 `min(8+kills·5, 다음 stime − stime − 14)`로 클램프.
+5. **`lead` 상한 상향** 125→175(big)/80→120(small): 접근을 더 일찍 시작(시작만 앞당김, 과속 아님).
+6. 남는 '합류 이동'은 전부 `diag`에 거리·`showDelay`와 함께 기록. `#N: rs 엔진 참가자이나 미니맵 사망`도 기록. `rd.travel={k,lateJoins,farJoins,ratioMedian}`, `diag[0]` = 대조 요약.
+7. **구조물 SVG**(`replay-theater.tsx`): 팀별 라인 3 × [외곽·내곽·억제기] + 넥서스포탑 2 + 넥서스 = 24개. `snap.struct`(재생 시각까지 집계된 상태)에서만 렌더 → **미래 상태 미노출**. 살아있음=팀색 채움, 파괴=회색 테두리. 데이터가 라인별 0..3 정수뿐 → **부분 피해 진행 바 없음**(데이터가 지원하는 만큼만).
+8. `manager.tsx` RECAP 이벤트 로그: `{e.winner ? meta(e.winner).short : ''}` 가드.
+
+### 이유
+- 사용자 지시: "단위 5의 Region/REGION_DIST와 미니맵 이동 시간을 대조한다. 논리상 도착했는데 화면에서는 이동 중인 모순을 방지한다. 불일치를 순간이동이나 과속으로 숨기지 않는다." → 대조 함수 + 속도 정렬(K) + 화면 지연(showDelay, 엔진 불변) + 잔차 전량 로그.
+- 시각화가 처치·승패·보상을 재계산하지 않음: `combat.participants`가 authoritative, 이동 모듈은 전투 결과를 안 만듦(D016 유지). 실제 합류 규칙은 **바꾸지 않음** — 화면 렌더 시각만 조정.
+
+### 영향
+- `lib/simulation/combat.ts`: `REGION_DIST`/`regionTime` export.
+- `lib/simulation/replay.ts`: `import {REGION_DIST,regionTime}`. `TRAVEL_K`·`walkNodeRegion`·`walkSeconds`·`travelAudit` 신규(export: `TRAVEL_K`,`travelAudit`). `evInfo`에 `eclock`/`stime`/`showDelay`. 해소·arming 블록의 타이밍 참조를 `stime`으로, `engineClock` 필드를 `eclock`으로 분리. 계획 재배정 + fightUntil/arriving 가드. tick 끝 이동 키프레임(긴 단일 구간 보간 폭증 방지). 종료 키프레임 `endClock+4`(루프 마지막 tick과 시각 겹침 방지). `ReplayData.travel`.
+- `app/replay-theater.tsx`: `STR` 좌표 상수 + `structLayer` useMemo + `<g className="rt-structs">`.
+- `app/globals.css`: `.rt-turret`/`.rt-inhib`/`.rt-nexus`/`.rt-nexus-x`.
+- `app/manager.tsx`: `e.winner` 가드(D015 잠재 크래시).
+- `tests/replay.test.mjs`: 섹션 3 step 상한 8→16(요구 변경 주석 — TRAVEL_K로 스텝 커짐). 섹션 10 신규(REGION_DIST 대조: 크기 80%+ 정렬·큰 차이 순서 보존·'도착 또는 사망 또는 diag 기록'·farJoins 유한·전량 로그).
+
+### 검증
+- 7개 스위트 PASS(replay 섹션 10 포함), tsc 0, build 0.
+- 12시드 재측정: "이동시간 부족" 335→**0**, "합류 실패" 335→**0**. "합류 이동"(도착 지연, 전량 diag) 12시드 250~410 · 원거리(>34u) 8~29/세트 — 전부 diag에 거리·지연 기록. `travelAudit` 비율: 대부분 0.66~1.45(중앙값 1.23), `top↔river`만 2.2(WALK 우회, 명시적 예외).
+- **브라우저 육안 확인함**: dev 서버(`localhost:5176`) RECAP 재생 — 00:06→11:49(전령·FB)→13:59(다음 사건) 아이콘이 서로 다른 위치에서 독립 이동(참가자 집결/비참가 라인 유지/사망 정지), 구조물 24개 렌더, 넥서스 파괴 시 해당 팀 넥서스만 회색+✕(다른 팀 온전 — 미래 미노출), 디버그(⚙)에서 통로·경로·행동 라벨 + 이동 대조 패널("이동 대조: TRAVEL_K=2.6 · WALK/REGION_DIST 비율 중앙값 1.28 · 지연 합류 N"), 배속 2×·시크·다음 사건·처음부터 동작, 콘솔 크래시 없음(가드 전에는 `meta('').short` 크래시 재현).
+- **미확인**: 모바일 뷰포트(`resize_window`가 OS 창은 줄였으나 CDP 스크린샷 뷰포트는 1568px 고정 — 반응형 CSS는 정적 규칙만). 탭 비활성/복귀(코드에 `visibilitychange` 핸들러 존재). 비교 GIF(자동화 Chrome이 5프레임 다운로드했으나 이 파일시스템에서 접근 불가).
+
+### 대안
+- `TRAVEL_K` 대신 WALK 세그먼트 비용을 개별 조정: 기각(단일 계수가 검증·재현 쉬움).
+- `showDelay` 없이 `lead`만 키워 해결: 불충분(한타→공성 14s 간격은 lead로 못 당김 — 앞 사건이 아직 진행 중). showDelay가 근본.
+- 합류 실패 시 순간이동 스냅: 기각(사용자 명시 금지). 계속 걷게 하고 diag 기록.
+- 구조물 부분 피해 바: 기각(엔진 데이터가 라인별 0..3뿐 — 없는 정밀도를 만들지 않음).
+
+관련: MINIMAP-02(D016), MATCH-SYS 단위 5(D015/D017). 후속: 접근 도착 시각 ↔ 합류 판정 통합(별도 체크포인트), 모바일/탭전환 브라우저 확인, 비교 영상.
+
 ## 새 결정 형식
 ID / 날짜 / 문제 / 선택 / 이유 / 영향 / 대안 / 관련 작업 ID. 실제로 정하지 않은 사항은 제안이라고 표시한다.

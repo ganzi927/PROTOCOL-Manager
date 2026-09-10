@@ -9,8 +9,8 @@
 | ABIL-01 | P1 | IN_PROGRESS | 선수 능력치의 경기 영향 개선. 1단계(라인·시야→개인 자원→후속 전투 전력) 완료 (2026-09-10, D007). 다음: Phase 3~5 |
 | COMP-01 | P1 | IN_PROGRESS | 조합 승률·메타·AI 밴픽 확장(PROTOCOL-Composition-Meta-Design.md). 단계 2 첫 슬라이스(조합 프로필→구간 효과, 단일 경로) 완료 (2026-09-10, D008). 다음: 단계 3~6 |
 | CAST-01 | P1 | IN_PROGRESS | 구조화된 중계. 1차(사건 기억·준비 beats·강도 tier·감독 레버·밀도 토글) 완료 (2026-09-10, D009). 다음: 참여자 상세·다중 조합 콜백·리캡 확대 |
-| MINIMAP-01/02 | P1 | IN_PROGRESS | 이동형 미니맵. 1단계(D013)·지속형 에이전트 재작성(MINIMAP-02, D016) 완료. 다음: 접근 도착↔합류 판정 통합, 탑·미드·오브·공성 애니 다듬기. 아래 "MINIMAP-01" 절 참조 |
-| MATCH-SYS | P1 | IN_PROGRESS | ABIL-01·COMP-01·CAST-01을 하나의 경기 시스템으로 통합. 단위 1(D010)·2(D011)·3(오브전+wa, D012)·4(참여자 한타, D014)·5(스노볼+구조물 종료, D015) 완료. 다음: 단위 6(표시 데이터 통합 — POG·골드 그래프·리캡). 아래 "MATCH-SYS" 절 참조 |
+| MINIMAP-01/02 | P1 | IN_PROGRESS | 이동형 미니맵. 1단계(D013)·지속형 에이전트(D016)·엔진 REGION_DIST 이동 정합+구조물 SVG(D018) 완료. 다음: 접근 도착↔합류 판정 통합(별도 체크포인트), 모바일/탭전환 브라우저 확인, 애니 다듬기. 아래 "MINIMAP-01" 절 참조 |
+| MATCH-SYS | P1 | IN_PROGRESS | ABIL-01·COMP-01·CAST-01을 하나의 경기 시스템으로 통합. 단위 1(D010)·2(D011)·3(D012)·4(D014)·5(D015)·5 정합성 점검(D017: behind 게이트 제거·CAP 시간/사건 분리·ADC 통제 실험) 완료. 다음: 단위 6(표시 데이터 통합 — POG·골드 그래프·리캡). 아래 "MATCH-SYS" 절 참조 |
 | SAVE-01 | P1 | TODO | v1/v2와 서로 다른 v3 형태의 마이그레이션 검증 |
 | DRAFT-01 | P2 | TODO | 선택/스왑 후 선수별 정확한 보정 표시 |
 | DOC-01 | P2 | TODO | 기존 GDD·README를 현행140종/Lv4/스왑 기준으로 통합 |
@@ -82,6 +82,14 @@
 - 중계: 공성 = 실제 철거만(피해만 입은 구조물을 파괴라고 안 함). 한타 넥서스 주장 삭제. CAP는 "판정승(정상 종료와 구분)". 미니맵: 공성 사건 이동 + `beat.struct` + 사이드 패널 텍스트 상태(구조물 아이콘 미구현의 명시적 대체).
 - 검증: N=8000 통제 — 정상(NEXUS) 96.2% / 상한(CAP) 3.8%, 사건/세트 16.8. 오브 확보→구조물 진행 90.5%. 첫 구조물 선취 팀 승률 68%. 공성 시 ADC 생존이면 철거 1.76 vs 사망 0.18. 강화 효과(페어 95% CI) 전부 0 배제 — 단위 4의 압축이 풀림. `combat.test` 섹션 10 / `replay.test` 섹션 8. 전체 스위트·tsc·build PASS. **전역 계수를 목표 승률에 맞추지 않음.** 브라우저 육안 미확인.
 
+### 단위 5 정합성 점검 · 완료 (2026-09-11, D017)
+- **`behind`(구조물 격차 −4 → 견제만) 게이트 완전 제거**. 공성 가능량 `capacity`는 생존 인원차·이동/부활 창·자원·라인 압박에서만. 인위적 역전 보너스 없음. 자연 제동(goldGap 하한 −0.6, 넥서스 openInhib+baseTurrets 0+수비 소수)만. `combat.test` 10j(열세팀 교전 승리 후 철거 — 회귀).
+- **CAP 분리**: `endReason` = `NEXUS`/`CAP_TIME`/`CAP_EVENT`. `SetResult.capDiag`(직전 구조물·베이스포탑·억제기·최근 공성 실패 사유·tiebreak 단계). 실측 CAP는 전부 `CAP_EVENT`(30 사건 상한), `CAP_TIME`(3600s) 0% — 안전망. **상한·계수 안 올림.**
+- **CAP 동전**: struct > pressure > advantage > `random(hash(seed|tiebreak|matchId|setIdx))` — 경기 난수와 분리된 전용 해시, 50/50, 3단계 완전 동률일 때만. 실측 도달 0.
+- **ADC 통제 실험**(10k): 공성 직전 상태 동일, 죽은 슬롯만 ADC↔TOP → 철거 1.00 vs 2.00. 순수 adcSiege 채널.
+- **신뢰구간**: `pairedCI` McNemar 산식 주석 + 페어 원자료(b,c). balance-review는 `m.id` 차이로 서로소 모집단 → 작은 강화(SUP_VIS +0.4 vs +2.2)는 부호 흔들림, 큰 강화(ADC_CAR·SUP_TF·팀+10)는 일치. VALIDATION 2026-09-11 절에 복구·설명.
+- 검증: N=6000 — NEXUS 97.62% / CAP 2.38%. 7개 스위트·tsc·build PASS. 커밋 `7167829`.
+
 ### 단위 6 — 표시 데이터 통합 (ABIL-01 Phase 4 + 중계 후속) ← 다음
 **정확한 첫 작업**: POG를 실제 개인 기여로 계산한다(현재는 `simulateSet` 말미의 역할별 고정 가중치 `contrib[]` 근사).
 1. `SetResult`에 세트 전체 개인 기여 집계를 추가: 각 사건의 `combat.fight.contrib`(kill/engage/protect/damage/survived) + `combat.siege`의 공성 참여 + 오브 확보 참여 + 갱킹 킬/어시를 슬롯별로 합산. 이미 사건 데이터에 다 있으므로 **재추첨·재계산 없이 합**.
@@ -121,12 +129,22 @@
 - `app/replay-theater.tsx`: 디버그 토글(통로·경로·행동 라벨·diag), `scatter` 표시 보정, `gameClock`, 1×/2×/4×. `ReplayData`에 `nav`·`diag`·`scale`, `TrackKey.act/reason`, `stateAt.gameClock`, `agentsAt`.
 - 검증: `replay.test` section 3 재작성·section 9 신설. 8시드: 정지 트랙 0/10, 벽 침범 0, 결정성 100%. **브라우저 육안 확인함**(RECAP 재생, 시점별 아이콘 분산·이동·경로·행동 라벨·동기·t=0 정지·컨트롤, 콘솔 오류 없음).
 
+### 엔진 REGION_DIST 이동 정합 + 구조물 SVG · 완료 (2026-09-11, D018)
+- `combat.ts` `REGION_DIST`/`regionTime` export → `replay.ts`가 단일 출처로 대조. `TRAVEL_K=2.6`으로 미니맵 WALK 이동 속도를 엔진 표 크기에 정렬(비율 중앙값 1.23, `top↔river`만 2.2 — WALK 우회, 명시적 예외). `travelAudit()` export.
+- **`showDelay`**(화면 렌더 지연): WALK 이동 시간이 엔진 사건 간격보다 길면 그만큼 화면 사건을 늦춰 참가자가 순간이동 대신 실제로 걷게. `stime`(화면)/`eclock`(엔진) 분리 — **엔진 판정·`engineClock` 불변**.
+- 계획 재배정(사건 종료 시 다음 armed 사건으로) + `fightUntil`/`arriving` 중 재계획·이동 지시 금지(같은 tick 키프레임 충돌). tick 끝 이동 키프레임(긴 구간 보간 폭증 방지).
+- 12시드: "이동시간 부족" 96→0, "합류 실패" 335→0. 남는 "합류 이동"(도착 지연)은 전량 `diag`에 거리·`showDelay` 기록(순간이동·과속 아님). `rd.travel` 요약, `diag[0]` = 대조 요약.
+- **구조물 SVG**(`replay-theater.tsx`): 포탑 18 + 넥서스포탑 4 + 넥서스 2 = 24개. `snap.struct`에서만 → 미래 미노출. 살아있음=팀색, 파괴=회색+✕. 데이터가 라인별 0..3 정수뿐 → 부분 피해 바 없음.
+- **크래시 수정**(D015 잠재): `manager.tsx` RECAP 이벤트 로그가 `winner:''`(공성 HELD/noMove)에서 `meta('').short` 크래시 → `e.winner` 가드.
+- `replay.test`: 섹션 3 step 상한 8→16(요구 변경 주석). 섹션 10 신규(REGION_DIST 대조).
+- 검증: 7개 스위트·tsc·build PASS. **브라우저 육안 확인함**(RECAP 재생·구조물 24개·넥서스 파괴 표시·디버그 이동 대조 패널·배속/시크·크래시 없음). 커밋 `9e2ac06`.
+
 ### 남은 작업
-- **접근 도착 시각 ↔ 합류 판정 통합**: 현재는 엔진 `combat.participants`가 authoritative(결과 불변). 실제 이동 도착 시각을 합류 판정에 연결하는 단계 — 기존 능력치 기반 판단과 독립 확률 이중 적용 없이. 결과가 바뀌는 부분을 명시 기록.
+- **접근 도착 시각 ↔ 합류 판정 통합**(별도 체크포인트): 현재 엔진 `combat.participants`가 authoritative(결과 불변). showDelay는 화면 렌더만 조정. 실제 이동 도착 시각을 합류 판정에 연결 — 기존 능력치 판단과 독립 확률 이중 적용 없이. 결과가 바뀌는 부분 명시 기록 + combat.test/teamfight-review 재측정.
 - 한타/오브/공성 사건의 진입·보호·후퇴·철수 애니메이션 타이밍을 갱킹 수준으로 다듬기, `notJoined`(리스폰 대기) 별도 연출.
-- 구조물 아이콘 SVG 렌더(현재 사이드 패널 텍스트만).
-- diag의 "합류 이동"/"이동시간 부족" 항목 줄이기(초반 far-lane 정글 갱킹, 후반 한타 lead 튜닝).
-- 모바일 지도 비율·아이콘 클릭→선수 상세 육안 확인.
+- 모바일 지도 비율·아이콘 클릭→선수 상세·탭 비활성 자동 일시정지 육안 확인(이번 세션 CDP 뷰포트 고정으로 미확인).
+- 비교 영상(변경 전 = git tag `minimap-pre-persistent` 체크아웃 필요).
+- `top↔river` WALK 직결 통로 추가 검토(현재 우회로 비율 2.2).
 
 ## COMP-01 — 조합 승률·메타·AI 밴픽 확장
 근거: `docs/claude/PROTOCOL-Composition-Meta-Design.md`(6단계). `PROTOCOL-Ability-Review.md`(ABIL-01)와 함께 진행. 회귀: `tests/composition.test.mjs`, 민감도는 `tests/balance-review.mjs`(조합 무관 = 불변이어야) + 임시 comp 측정 스크립트.

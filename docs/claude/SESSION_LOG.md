@@ -193,3 +193,31 @@
 - 미검증/남은 것: 접근 도착 시각↔합류 판정 통합(현재 `combat.participants`가 authoritative), 한타/오브/공성 애니 타이밍 다듬기, `notJoined` 연출, 구조물 아이콘 SVG, 모바일 비율, 아이콘 클릭.
 - 다음 첫 행동: MATCH-SYS 단위 6(표시 데이터 통합) 또는 MINIMAP 접근↔합류 통합. HANDOFF "다음 첫 행동" A/B.
 - 배포: 안 함.
+
+## 2026-09-11 — 단위 5 정합성 점검 (D017) + 미니맵 이동 정합·구조물 (D018)
+
+사용자 요청: 단위 6(POG) 앞에 (1) 단위 5 정합성 점검 — 별도 체크포인트, (2) 지속형 미니맵 현황 확인·미완 연결 + Region/REGION_DIST 대조 + 구조물 표시, (3) 브라우저 확인·비교 영상.
+
+### D017 (커밋 `7167829`) — 단위 5 점검
+- `resolveSiege`: **`behind`(구조물 격차 −4 → 견제만) 게이트 완전 제거**. 공성 가능량은 생존 인원차·이동/부활 창·자원·라인 압박에서만. 인위적 역전 보너스 없음. `REGION_DIST`/`regionTime` export.
+- `lib/game.ts`: `endReason` → `NEXUS`/`CAP_TIME`/`CAP_EVENT`. `SetResult.capDiag`(직전 구조물·최근 공성 실패·tiebreak 단계). CAP 판정 struct > pressure > advantage > 전용 동전(분리 해시).
+- `combat.test` 10i(capDiag 계약) 재작성 + **10j**(구조물 열세팀이 교전 승리 후 철거 — 회귀) + **10k**(공성 직전 상태 동일, 죽은 슬롯만 ADC↔TOP — 통제 실험, 철거 1.00 vs 2.00).
+- `teamfight-review.mjs`: CAP 시간/사건 분리·tiebreak 분포·CAP/동전 A승률 집계, `pairedCI`에 McNemar 산식 주석 + 페어 원자료(b,c).
+- 결과(N=6000): NEXUS 97.62% / CAP 2.38%(전부 EVENT, TIME 0%). CAP 동전 실측 도달 0. 강화 CI 전부 0 배제. balance-review는 `m.id` 차이로 서로소 모집단 → 작은 효과(SUP_VIS +0.4 vs +2.2) 부호 흔들림, 큰 효과는 일치 — VALIDATION에 복구·설명.
+
+### D018 (커밋 `9e2ac06`) — 미니맵 이동 정합 + 구조물 + 크래시
+- **현황 표**(HANDOFF): MINIMAP-02 8개 요구 중 대부분 완료·부분 2·미완 3(도착↔합류 통합, 구조물 SVG, 모바일/탭). 이번에 구조물 SVG + Region 대조를 연결.
+- `replay.ts`: `import {REGION_DIST,regionTime}`. `TRAVEL_K=2.6`(속도 정렬), `travelAudit()`/`walkSeconds` export. `showDelay`(화면 렌더 지연 — WALK 이동시간이 엔진 간격보다 길면 화면 사건을 늦춤, `stime`/`eclock` 분리, **엔진 판정 불변**). 계획 재배정(사건 종료 시 다음 armed 사건으로) + `fightUntil`/`arriving` 중 재계획·이동 지시 금지(같은 tick 키프레임 충돌). tick 끝 이동 키프레임(긴 구간 보간 폭증 방지). 종료 키프레임 `endClock+4`. `ReplayData.travel`.
+- 결과(12시드): "이동시간 부족" 96→0, "합류 실패" 335→0. 남는 "합류 이동"은 전량 `diag`에 거리·지연 기록(순간이동·과속 아님). `travelAudit` 비율 중앙값 1.23.
+- `replay-theater.tsx`: **구조물 SVG 24개**(포탑 18 + 넥서스포탑 4 + 넥서스 2). `snap.struct`에서만 → 미래 미노출. 살아있음=팀색, 파괴=회색+✕. 데이터가 0..3뿐 → 부분 피해 바 없음.
+- `replay.test`: 섹션 3 step 상한 8→16(요구 변경 주석). 섹션 10 신규(REGION_DIST 대조).
+- **크래시 수정**: `manager.tsx` RECAP 이벤트 로그가 `winner:''`(공성 HELD/noMove)에서 `meta('').short` 크래시 — D015 잠재 버그. `e.winner` 가드.
+- **브라우저 육안 확인함**: RECAP 재생(t=0 홈 정지 → 전령 FB → 다음 사건), 구조물 24개·넥서스 파괴 표시(해당 팀만), 디버그 이동 대조 패널, 배속/시크/다음사건, 콘솔 크래시 없음. 미확인: 모바일 뷰포트(CDP 고정), 탭 전환. GIF는 Chrome 다운로드했으나 파일시스템 접근 불가.
+
+### 검증
+- 7개 스위트(combat/replay/ability/composition/narration/management/engine) PASS, tsc 0, build 0. 상세 `VALIDATION.md` 2026-09-11 절.
+
+### 다음
+- MATCH-SYS 단위 6(POG·골드 그래프·리캡 — 실제 개인 기여). BACKLOG "단위 6" 절.
+- MINIMAP: 접근 도착 시각 ↔ 합류 판정 통합(별도 체크포인트), 모바일/탭전환 브라우저 확인, 비교 영상.
+- 배포: 안 함.

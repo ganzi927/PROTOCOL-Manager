@@ -591,24 +591,20 @@ export function resolveSiege(st:MatchState, seq:number, clock:number, crng:()=>n
  const adcAlive=st[atkSide][3].alive;
  const adcSiege=adcAlive?(eff(st[atkSide][3],S_CAR)-50)/70:-0.4;   // 살아남은 원딜이 철거를 크게 당긴다
  const momentum=Math.max(...st.lanePush[atkSide]);               // 연속 공성 주도권(오브·한타 승리·직전 철거에서 누적)
- // 구조물에서 크게 앞선 쪽만 베이스까지 밀 수 있다. 뒤진 쪽은 견제·지연만(스노볼 되돌리기 금지).
- const dealtMe=st.struct[defSide].reduce((a,b)=>a+b,0)+(2-st.baseTurrets[defSide])*2;
- const dealtOpp=st.struct[atkSide].reduce((a,b)=>a+b,0)+(2-st.baseTurrets[atkSide])*2;
+ // 공성 가능량은 실제 상황(생존 공격자·수비자·이동 시간·부활 창·라인 압박·개인 자원)에서만 유도한다.
+ //  - 구조물에서 뒤졌다는 사실 자체는 공성을 막지 않는다(D017): 열세팀도 유리한 교전을 이기면 구조물을 철거할 수 있어야 한다.
+ //  - 스노볼 되돌리기는 인위적 보너스로 막지 않는다. 자연스러운 제동(goldGap 하한 −0.6, 넥서스는 openInhib+baseTurrets 0+수비 소수 필요)만 유지.
  // 교전 결과(numAdv)와 운영 주도권(momentum)이 주 동력. 자원차는 이미 확률 채널(resPow)에도 쓰였으므로 여기선 보조.
  let capacity=numAdv*1.15+timeF*1.15+clampN(goldGap,-0.6,0.85)+(bestObj-55)/44+adcSiege*0.75+momentum*1.0;
  capacity=Math.max(0,capacity);
- const behind=dealtMe<dealtOpp-3;                                // 이 팀이 구조물에서 크게 뒤진다
 
  const res=[0,0,0,0,0,0,0,0,0,0];
  const add=(sl:number,g:number)=>{ st[atkSide!][sl].gold+=g; res[(atkSide==='A'?0:5)+sl]+=g; };
  const evd:string[]=[`${atkSide} ${atk.length}인 공성 vs ${defSide} ${def.length}인 수비 · 부활까지 ${Math.round(reinforceIn)}초 · 여력 ${capacity.toFixed(1)}`];
  let structuresDown=0,inhib=false,nexus=false;
  let budget=Math.floor(capacity);
- if(behind){ budget=Math.min(budget,1); evd.push(`${atkSide} 구조물 열세 — 견제·지연만`); }
 
- if(targetBase&&behind){
-  evd.push(`${atkSide} 열세 상태로는 베이스를 밀 수 없습니다`);
- }else if(targetBase){
+ if(targetBase){
   if(!openInhib){ evd.push(`${atkSide} 베이스 앞 — 억제기가 열리지 않아 진입 불가`); }
   else {
    const btDown=Math.min(st.baseTurrets[defSide],Math.max(0,budget));

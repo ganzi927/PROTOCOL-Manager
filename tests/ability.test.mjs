@@ -82,7 +82,7 @@ const sum=ns=>ns.reduce((x,y)=>x+y,0);
  for(let s=0;s<400;s++){g.seed=s*7+1;const r=simulateSet(g,m);
   assert.ok(r.winner===m.a||r.winner===m.b);
   assert.ok(r.events.length>=5&&r.events.length<=32); // 단위 5: 스켈레톤 9구간 + 공성·연장 운영 사건(요구 변경)
-  assert.ok(r.endReason==='NEXUS'||r.endReason==='CAP'); // 명시적 종료 사유
+  assert.ok(r.endReason==='NEXUS'||r.endReason==='CAP_TIME'||r.endReason==='CAP_EVENT'); // 명시적 종료 사유(CAP는 시간/사건 상한 구분)
   assert.ok(r.leadA.length===5&&r.leadA.every(Number.isFinite));
   for(const e of r.events){
    assert.ok(Number.isFinite(e.leadA)&&Math.abs(e.resPowA)<=8);

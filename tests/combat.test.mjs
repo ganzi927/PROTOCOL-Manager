@@ -499,30 +499,86 @@ const CRNG=()=>random(hash('obj-test'));
   assert.equal(JSON.stringify(x),JSON.stringify(y));
  }
 
- // 10i. simulateSet 통합: 정상 종료(NEXUS)와 상한 종료(CAP)가 모두 나오고, 명시적으로 구분된다.
+ // 10i. simulateSet 통합: 정상 종료(NEXUS)와 상한 종료(CAP_TIME/CAP_EVENT)가 명시적으로 구분되고 capDiag가 채워진다.
  {
-  let nexus=0,cap=0,capW=0;
+  let nexus=0,cap=0,capTime=0,capEvent=0,coin=0;
   for(let s=0;s<400;s++){
    const g=upgradeGame(newGame('nva',s));
    const r=simulateSet(g,{id:'s10i'+s,a:'nva',b:'crn',bestOf:3,scoreA:0,scoreB:0,sets:[],label:'R1'});
-   const m={a:'nva'};
-   assert.ok(r.endReason==='NEXUS'||r.endReason==='CAP','명시적 종료 사유');
+   assert.ok(['NEXUS','CAP_TIME','CAP_EVENT'].includes(r.endReason),'명시적 종료 사유');
    if(r.endReason==='NEXUS'){
     nexus++;
     const nx=r.events.find(e=>e.combat?.kind==='siege'&&e.combat.siege.nexus);
     assert.ok(nx,'NEXUS 종료엔 실제 넥서스 파괴 공성 사건이 있다');
-    assert.ok(!r.events.some(e=>e.phase==='종료'),'정상 종료엔 시간 제한 사건이 없다');
+    assert.ok(!r.events.some(e=>e.phase==='종료'),'정상 종료엔 상한 사건이 없다');
+    assert.ok(!r.capDiag,'NEXUS 종료엔 capDiag 없음');
    }else{
-    cap++; capW+=r.winner===m.a;
+    cap++; if(r.endReason==='CAP_TIME')capTime++; else capEvent++;
     assert.ok(!r.events.some(e=>e.combat?.kind==='siege'&&e.combat.siege.nexus),'CAP 종료엔 넥서스 파괴가 없다');
-    assert.ok(r.events.some(e=>e.phase==='종료'),'CAP 종료엔 시간 제한 판정 사건이 있다');
+    assert.ok(r.events.some(e=>e.phase==='종료'),'CAP 종료엔 상한 판정 사건이 있다');
     assert.ok(!r.events.at(-1).detail.includes('넥서스를 파괴'),'CAP 중계는 넥서스 파괴를 말하지 않는다');
+    // capDiag 계약
+    const cd=r.capDiag;
+    assert.ok(cd,'CAP 종료엔 capDiag가 채워진다');
+    assert.equal(cd.reason,r.endReason==='CAP_TIME'?'TIME':'EVENT','capDiag.reason이 endReason과 일치');
+    assert.ok(['struct','pressure','advantage','coin'].includes(cd.tiebreakStage),'tiebreak 단계 명시');
+    assert.ok(Array.isArray(cd.structDealt)&&cd.structDealt.length===2,'구조물 피해 [A,B] 집계');
+    // 판정이 tiebreakStage와 실제로 일치하는지(동전이 아니면 결정적 근거가 있어야)
+    if(cd.tiebreakStage==='struct') assert.notEqual(cd.structDealt[0],cd.structDealt[1],'struct 단계면 구조물 피해가 다르다');
+    if(cd.tiebreakStage==='coin'){ coin++; assert.equal(cd.structDealt[0],cd.structDealt[1],'coin 단계면 구조물 피해 동률'); }
    }
-   // 넥서스는 세트당 최대 1개 파괴
    assert.ok(r.events.filter(e=>e.combat?.kind==='siege'&&e.combat.siege.nexus).length<=1,'세트당 넥서스 1회');
   }
   assert.ok(nexus>0,'정상(NEXUS) 종료 사례 존재');
-  assert.ok(cap>=0,'상한(CAP) 종료 카운트'); // CAP는 드물 수 있음(0 허용) — 존재만 확인 안 함
+  // 시간/사건 상한 분리 기록(현 상수에서 CAP는 사실상 전부 EVENT — 시간 상한은 안전망). 값은 진단용, 강제하지 않음.
+  console.log(`  · 10i: NEXUS ${nexus} · CAP ${cap} (TIME ${capTime} / EVENT ${capEvent}, 동전 판정 ${coin})`);
+ }
+
+ // 10j. 회귀(D017): 구조물에서 뒤진 팀도 유리한 교전을 이기면 구조물을 철거할 수 있다.
+ //      "구조물 열세 = 견제만" 하드 게이트를 제거했으므로, 생존 인원차·창(窓)만 있으면 열세팀도 철거한다.
+ {
+  const behindWin=()=>mkState(s=>{
+   s.clock=1500; s.region.A='river'; s.region.B='base';
+   // A는 구조물에서 크게 뒤진다: B가 A 구조물을 많이 철거함(struct.A 높음), A는 B에 손도 못 댐(struct.B=0).
+   s.struct.A=[3,2,2]; s.baseTurrets.A=1; s.struct.B=[0,0,0];
+   // 그런데 방금 유리한 교전을 이겨 A 4명 생존 · B 4명 사망(리스폰 대기).
+   for(const sl of [0,1,2,3]){ s.B[sl].alive=false; s.B[sl].deaths++; s.B[sl].respawnAt=1550; }
+   for(const c of [...s.A,...s.B]) c.gold=1500;
+  });
+  let down=0,n=200;
+  for(let i=0;i<n;i++) down+=resolveSiege(behindWin(),30,1500,seedRng('s10j-'+i)).siege.structuresDown;
+  assert.ok(down/n>=0.8,`구조물 열세팀도 교전 승리 후 철거한다: 평균 ${(down/n).toFixed(2)}개/공성`);
+  // 대조: 같은 구조물 열세 + 인원차/창 없음(양 팀 생존) → 공격자 자격 없음 → RESET(철거 0). 열세 자체가 원인이 아님을 보인다.
+  const behindEven=()=>mkState(s=>{
+   s.clock=1500; s.region.A='river'; s.region.B='river';
+   s.struct.A=[3,2,2]; s.baseTurrets.A=1; s.struct.B=[0,0,0];
+   for(const c of [...s.A,...s.B]) c.gold=1500;
+  });
+  const rc=resolveSiege(behindEven(),30,1500,seedRng('s10j-even'));
+  assert.equal(rc.siege.structuresDown,0,'인원차·창이 없으면 (열세든 아니든) 철거 없음');
+  assert.equal(rc.siege.result,'RESET');
+ }
+
+ // 10k. 통제 실험: 동일한 공성 직전 상태에서 죽은 A 슬롯만 ADC↔TOP로 바꾼다(생존 인원차·창·자원 전부 동일).
+ //      두 팔 모두 A 4인 : B 3인(numAdv=1), B 2명 리스폰 대기. 차이는 '살아남은 게 CAR↑ 원딜이냐'뿐 → 순수 adcSiege 채널.
+ {
+  const arm=(deadSlot)=>mkState(s=>{           // deadSlot: 3=ADC 사망(TOP 생존) / 0=TOP 사망(ADC 생존)
+   s.clock=1400; s.region.A='river'; s.region.B='river';
+   s.B[0].alive=false; s.B[0].deaths++; s.B[0].respawnAt=1428;   // 수비 2명 사망(창 확보)
+   s.B[1].alive=false; s.B[1].deaths++; s.B[1].respawnAt=1432;
+   // 자원 통제: 생존 인원 합 골드가 양 팀 동일하도록(A 4인 1500 = B 3인 2000) → goldGap 항 ≈ 0.
+   for(const c of s.A) c.gold=1500; for(const c of s.B) c.gold=2000;
+   s.A[3].stats[5]=92;                                           // CAR 높은 원딜
+   s.A[deadSlot].alive=false; s.A[deadSlot].deaths++; s.A[deadSlot].respawnAt=99999;
+  });
+  let adcDead=0,topDead=0,n=500;
+  for(let i=0;i<n;i++){
+   adcDead+=resolveSiege(arm(3),40,1400,seedRng('k-d-'+i)).siege.structuresDown; // ADC 사망
+   topDead+=resolveSiege(arm(0),40,1400,seedRng('k-c-'+i)).siege.structuresDown; // TOP 사망(ADC 생존) — 인원차 동일
+  }
+  // 인원차·창·자원 완전 통제 후에도, 살아남은 게 CAR↑ 원딜이면 철거가 더 많다(순수 adcSiege 채널).
+  assert.ok(topDead/n > adcDead/n + 0.2, `공성 직전 상태 동일, ADC 생존만 다름 → 철거: ADC생존 ${(topDead/n).toFixed(2)} > ADC사망 ${(adcDead/n).toFixed(2)}`);
+  console.log(`  · 10k: 철거/공성 [A4:B3, 죽은 슬롯만 ADC↔TOP] — ADC사망 ${(adcDead/n).toFixed(2)} vs ADC생존 ${(topDead/n).toFixed(2)}`);
  }
 }
 

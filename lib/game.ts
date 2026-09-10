@@ -34,7 +34,8 @@ export type Draft={picksA:string[],picksB:string[],bans:string[],actions:{team:s
 export type DraftPick={champ:string,role:Role};
 export type DraftState={blue:string,red:string,step:number,bans:{side:'B'|'R',champ:string}[],picksBlue:DraftPick[],picksRed:DraftPick[],actions:{team:string,kind:string,champ:string}[],complete:boolean};
 export type GameEvent={index:number,phase:string,title:string,winner:string,edge?:string,prob:number,advantage:number,powerA:number,powerB:number,goldA:number,goldB:number,detail:string,leadA?:number,resPowA?:number,compA?:number,beats?:Beat[],tier?:Tier,kills?:{a:number,b:number},combat?:CombatEvent};
-export type SetResult={winner:string,endReason?:'NEXUS'|'CAP',events:GameEvent[],draft:Draft,recap:string[],pog:string,powersA:number[],powersB:number[],lineupA:string[],lineupB:string[],leadA?:number[],draftFx?:{lane:number,obj:number,fight:number}};
+export type CapDiag={reason:'TIME'|'EVENT',clock:number,events:number,structDealt:[number,number],baseTurrets:[number,number],inhibsOpen:[number,number],recentSiegeFails:string[],tiebreakStage:'struct'|'pressure'|'advantage'|'coin'};
+export type SetResult={winner:string,endReason?:'NEXUS'|'CAP_TIME'|'CAP_EVENT',capDiag?:CapDiag,events:GameEvent[],draft:Draft,recap:string[],pog:string,powersA:number[],powersB:number[],lineupA:string[],lineupB:string[],leadA?:number[],draftFx?:{lane:number,obj:number,fight:number}};
 export type Match={id:string,a:string,b:string,bestOf:number,scoreA:number,scoreB:number,sets:SetResult[],winner?:string,draft?:Draft,draftState?:DraftState,label:string};
 export type RecordMatch={id:string,a:string,b:string,sa:number,sb:number,winner:string,label:string,season:number};
 export type Game={version:number,seed:number,season:number,split:'SPRING'|'SUMMER',round:number,stage:'REGULAR'|'PLAYOFF'|'INTERNATIONAL',phase:'PLAN'|'PREP'|'DRAFT'|'RECAP'|'MATCH_END'|'SPLIT_END'|'OFFSEASON'|'WORLD_END',teamId:string,players:Player[],teams:Team[],fixtures:string[][][],match:Match|null,history:RecordMatch[],news:string[],hall:{season:number,split:string,champion:string,rank:number}[],po:Match[],poSeeds:string[],champion:string|null,trained:boolean,offWeek:number,ledger:{label:string,amount:number}[],planNotice:string[],meta:string[],international?:International,settledWeeks?:number,sandbox?:boolean};
@@ -241,7 +242,8 @@ export function simulateSet(g:Game,m:Match):SetResult{
  const labels=['탑 라인전','미드 라인전','바텀 라인전','전령 교전','드래곤 교전','중반 교전','후반 교전','마지막 진격','기지 결전'];
  const CLOCK_CAP=3600, EVENT_CAP=30;      // 무한 실행 방지 상한(경기 시계 초 / 사건 수). 도달은 정상 넥서스 승리와 구분해 기록.
  let ei=0;                               // GameEvent.index (스켈레톤 0..8, 이후 공성·연장 사건이 이어 붙는다)
- let endReason:'NEXUS'|'CAP'='CAP';
+ let endReason:'NEXUS'|'CAP_TIME'|'CAP_EVENT'='CAP_EVENT';
+ let capDiag:CapDiag|undefined;
  let firstStructSide:Side|null=null;     // 첫 구조물 선취 팀(검증 지표)
 
  // 구간 확률 롤. phase 0~2 라인 / 3 오브 / 4 한타. resPow(자원→전력)·comp(조합)는 확률 채널 — 구조물 진행은 여기 더하지 않는다(D007 단일 경로).
@@ -320,17 +322,29 @@ export function simulateSet(g:Game,m:Match):SetResult{
  if(nexusDown){
   winner=cs.nexus.B?m.a:m.b; // B 넥서스 파괴 → A 승
  }else{
-  // 상한 종료: 넥서스 미파괴. 명시적 판정 — 구조물 우위 > pressure > advantage > 전용 동전. edgeA·마지막 사건 방향을 숨은 기본 승자로 쓰지 않는다.
-  endReason='CAP';
+  // 상한 종료: 넥서스 미파괴. 시간 상한(CLOCK_CAP)과 사건 상한(EVENT_CAP)을 구분해 기록한다.
+  // 판정 — 구조물 우위 > pressure > advantage > 전용 동전(seed 고정 해시, 경기 outcome 난수와 분리).
+  // edgeA·마지막 사건 방향을 숨은 기본 승자로 쓰지 않는다. 동전은 위 3단계가 모두 완전 동률일 때만.
+  const capReason:'TIME'|'EVENT'=cs.clock>=CLOCK_CAP?'TIME':'EVENT';
+  endReason=capReason==='TIME'?'CAP_TIME':'CAP_EVENT';
   const dealt=(atk:Side,def:Side)=>cs.struct[def].reduce((a,b)=>a+b,0)+(2-cs.baseTurrets[def])*2+(cs.nexus[def]?6:0);
   const sA=dealt('A','B'), sB=dealt('B','A');
-  winner=sA!==sB?(sA>sB?m.a:m.b)
-   :pressureA!==pressureB?(pressureA>pressureB?m.a:m.b)
-   :advantage!==0?(advantage>0?m.a:m.b)
-   :(random(hash(`${g.seed}|tiebreak|${m.id}|${m.sets.length}`))()<0.5?m.a:m.b);
+  let tiebreakStage:CapDiag['tiebreakStage'];
+  if(sA!==sB){ winner=sA>sB?m.a:m.b; tiebreakStage='struct'; }
+  else if(pressureA!==pressureB){ winner=pressureA>pressureB?m.a:m.b; tiebreakStage='pressure'; }
+  else if(advantage!==0){ winner=advantage>0?m.a:m.b; tiebreakStage='advantage'; }
+  else { winner=random(hash(`${g.seed}|tiebreak|${m.id}|${m.sets.length}`))()<0.5?m.a:m.b; tiebreakStage='coin'; }
+  // CAP 직전 상태 집계(원인 분석용 — 숨기지 않는다). 최근 공성 실패 사유 최대 5건.
+  const siegeFails=events.filter(e=>e.phase==='공성'&&e.combat?.kind==='siege'
+    &&['NO_WINDOW','HELD','RESET'].includes(e.combat.siege!.result))
+   .slice(-5).map(e=>{const s=e.combat!.siege!;return `#${e.index} ${s.side} ${s.result}(부활 ${s.reinforceIn}s·여력 ${s.capacity})`;});
+  capDiag={reason:capReason,clock:Math.round(cs.clock),events:ei,structDealt:[sA,sB],
+   baseTurrets:[cs.baseTurrets.A,cs.baseTurrets.B],
+   inhibsOpen:[cs.struct.B.filter(v=>v>=3).length,cs.struct.A.filter(v=>v>=3).length],
+   recentSiegeFails:siegeFails,tiebreakStage};
   const wsS=meta(winner).short;
-  events.push({index:ei++,phase:'종료',title:'시간 제한',winner,edge:winner,prob:50,advantage,powerA:0,powerB:0,goldA:Math.round(gA/10)*10,goldB:Math.round(gB/10)*10,
-   detail:`시간 제한 도달 — 넥서스는 파괴되지 않았습니다. 구조물 피해 ${sA}:${sB} · pressure ${pressureA}:${pressureB} 기준으로 ${wsS} 판정승(정상 종료와 구분).`,
+  events.push({index:ei++,phase:'종료',title:capReason==='TIME'?'시간 상한':'사건 상한',winner,edge:winner,prob:50,advantage,powerA:0,powerB:0,goldA:Math.round(gA/10)*10,goldB:Math.round(gB/10)*10,
+   detail:`${capReason==='TIME'?'시간 상한(3600초)':'사건 상한(30개)'} 도달 — 넥서스 미파괴. 구조물 피해 ${sA}:${sB} · pressure ${pressureA}:${pressureB} · ${tiebreakStage==='coin'?'동전':tiebreakStage} 기준 ${wsS} 판정승(정상 종료와 구분).`,
    beats:[],tier:'close',kills:{a:0,b:0},leadA:Math.round(lead.reduce((a,b)=>a+b,0)),resPowA:0,compA:0});
  }
  const own=m.a===g.teamId?pa:pb,other=m.a===g.teamId?pb:pa;const diffs=[avg(own.slice(0,3))-avg(other.slice(0,3)),own[3]-other[3],own[4]-other[4]];const weak=diffs.indexOf(Math.min(...diffs)),strong=diffs.indexOf(Math.max(...diffs));
@@ -339,8 +353,8 @@ export function simulateSet(g:Game,m:Match):SetResult{
  const lastTf=events.filter(e=>e.combat?.kind==='teamfight').at(-1)??events.at(-1)!;
  const endLine=endReason==='NEXUS'
   ?`${meta(winner).short}가 넥서스를 파괴하며 세트를 마무리했습니다.`
-  :`시간 제한으로 세트가 종료됐습니다 — ${meta(winner).short}가 구조물·교전 우위로 판정승(넥서스 미파괴).`;
- return {winner,endReason,events,draft,pog,powersA:pa,powersB:pb,leadA:lead.map(x=>Math.round(x)),draftFx:{lane:Math.round(de.lane*100)/100,obj:Math.round(de.obj*100)/100,fight:Math.round(de.fight*100)/100},lineupA:starters(g,m.a).map(p=>p.id),lineupB:starters(g,m.b).map(p=>p.id),recap:[`${['라인전','오브젝트','한타'][strong]} 파워 격차 ${diffs[strong]>=0?'+':''}${diffs[strong].toFixed(1)}. ${diffs[strong]>=0?'우리 팀이 우위를 만들었습니다.':'상대가 전반적인 전력에서 앞섰습니다.'}`,`${['라인전','오브젝트','한타'][weak]}에서 ${Math.abs(diffs[weak]).toFixed(1)}의 전력 ${diffs[weak]<0?'열세':'우위'}. ${weak===2?'피로와 조합, 팀 호흡을 함께 확인하세요.':weak===1?'정글·서포터 훈련과 운영 전술을 검토하세요.':'라인 주도권과 우선 라인을 조정해 보세요.'}`,`${endLine} 마지막 교전 우리 팀 승리 확률은 ${(m.a===g.teamId?lastTf.prob:100-lastTf.prob).toFixed(1)}%였습니다. 확률이 승리를 보장하지는 않습니다.`]};
+  :`${endReason==='CAP_TIME'?'시간 상한':'사건 상한'}으로 세트가 종료됐습니다 — ${meta(winner).short}가 구조물·교전 우위로 판정승(넥서스 미파괴).`;
+ return {winner,endReason,capDiag,events,draft,pog,powersA:pa,powersB:pb,leadA:lead.map(x=>Math.round(x)),draftFx:{lane:Math.round(de.lane*100)/100,obj:Math.round(de.obj*100)/100,fight:Math.round(de.fight*100)/100},lineupA:starters(g,m.a).map(p=>p.id),lineupB:starters(g,m.b).map(p=>p.id),recap:[`${['라인전','오브젝트','한타'][strong]} 파워 격차 ${diffs[strong]>=0?'+':''}${diffs[strong].toFixed(1)}. ${diffs[strong]>=0?'우리 팀이 우위를 만들었습니다.':'상대가 전반적인 전력에서 앞섰습니다.'}`,`${['라인전','오브젝트','한타'][weak]}에서 ${Math.abs(diffs[weak]).toFixed(1)}의 전력 ${diffs[weak]<0?'열세':'우위'}. ${weak===2?'피로와 조합, 팀 호흡을 함께 확인하세요.':weak===1?'정글·서포터 훈련과 운영 전술을 검토하세요.':'라인 주도권과 우선 라인을 조정해 보세요.'}`,`${endLine} 마지막 교전 우리 팀 승리 확률은 ${(m.a===g.teamId?lastTf.prob:100-lastTf.prob).toFixed(1)}%였습니다. 확률이 승리를 보장하지는 않습니다.`]};
 }
 function finishMatch(g:Game,m:Match){m.winner=m.scoreA>m.scoreB?m.a:m.b;const a=team(g,m.a),b=team(g,m.b);if(g.stage==='REGULAR'){a.sw+=m.scoreA;a.sl+=m.scoreB;b.sw+=m.scoreB;b.sl+=m.scoreA;(m.winner===m.a?a:b).wins++;(m.winner===m.a?b:a).losses++;}for(const t of [a,b]){for(const p of g.players.filter(p=>new Set(m.sets.flatMap(s=>t.id===m.a?s.lineupA:s.lineupB)).has(p.id))){p.burn=clamp(p.burn+4);p.form=clamp(p.form+(t.id===m.winner?2:-2));}t.familiarity[key(t)]=clamp((t.familiarity[key(t)]??20)+1,20,100);}
  for(const set of m.sets){const p=g.players.find(p=>p.id===set.pog);if(p)p.pog++;}

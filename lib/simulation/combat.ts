@@ -86,14 +86,15 @@ const clamp01=(v:number)=>Math.min(1,Math.max(0,v));
 const clampN=(v:number,lo:number,hi:number)=>Math.min(hi,Math.max(lo,v));
 
 // 지역 간 이동 시간(초). 정밀 좌표 대신 라인/강/베이스 추상 이동 — 미니맵 좌표가 판정을 바꾸지 않는다.
-const REGION_DIST:Record<Region,Record<Region,number>>={
+// export: 미니맵(replay.ts)이 자기 WALK 그래프 이동 시간을 이 표에 대조한다(단일 출처).
+export const REGION_DIST:Record<Region,Record<Region,number>>={
  base:{base:0,top:22,mid:18,bot:22,river:20},
  top:{base:22,top:0,mid:15,bot:26,river:12},
  mid:{base:18,top:15,mid:0,bot:15,river:8},
  bot:{base:22,top:26,mid:15,bot:0,river:12},
  river:{base:20,top:12,mid:8,bot:12,river:0},
 };
-const regionTime=(from:Region,to:Region)=>REGION_DIST[from][to];
+export const regionTime=(from:Region,to:Region)=>REGION_DIST[from][to];
 const opp=(s:Side):Side=>s==='A'?'B':'A';
 // 유효 능력 = 기본 스탯 + 숙련(레벨당 +2) − 오프롤 페널티. game.ts의 OFFROLE_PEN(6)과 맞춘다.
 const eff=(c:Combatant,k:number)=>c.stats[k]+c.mastery*2-(c.off?6:0);

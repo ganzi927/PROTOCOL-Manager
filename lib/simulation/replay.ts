@@ -14,10 +14,13 @@
 //  - 사건은 발생 전에 접근 계획을 만들어 실제 경로로 이동해 합류. 발생 순간 순간이동 없음.
 //    이동 가능 시간과 사건 일정이 충돌하면 diag에 기록.
 
+import {REGION_DIST,regionTime} from './combat.ts';   // 엔진 추상 지역 이동 시간표(단일 출처) — 미니맵 이동 시간 대조용
+
 export type Side='A'|'B';
 export type Vec=[number,number];
 export type Slot=0|1|2|3|4;
 export type Ref={side:Side,slot:number};
+export type EngRegion='base'|'top'|'mid'|'bot'|'river';
 
 // ── 지도(공개 계약): 0~100 좌표계. SVG y는 아래로 증가. A(블루)=좌하, B(레드)=우상. ─────
 export const MAP:{size:number,nodes:Record<string,Vec>,edges:[string,string][]}={
@@ -113,6 +116,39 @@ function nearestWalkNode(p:Vec):string{
 }
 function pathLen(p:Vec[]):number{let s=0;for(let i=1;i<p.length;i++)s+=dist(p[i-1],p[i]);return s;}
 
+// ── 엔진 REGION_DIST ↔ 미니맵 WALK 이동 시간 대조 ─────────────────────────────────────────
+// 엔진(combat.ts)은 지역(base/top/mid/bot/river)을 추상 초 단위 표로 이동시킨다. 미니맵은 WALK 그래프
+// 위를 map-unit/초로 이동한다. 두 모델은 위상이 다르다(예: 엔진은 강↔탑을 인접 취급, WALK는 우회).
+//  - TRAVEL_K: 미니맵 이동 속도를 엔진 표의 크기에 맞추는 보정 계수(중앙값 정렬, 실측 기준).
+//  - 정확히 일치시키지 않는다. 남는 차이는 buildReplay의 diag/travelAudit에 기록한다
+//    (순간이동·과속으로 숨기지 않는다 — 사용자 지시).
+export const TRAVEL_K=2.6;
+const REGION_NODE:Record<EngRegion,[string,string]>={ // [A 진영 대표 노드, B 진영 대표 노드]
+ base:['A_base','B_base'], top:['A_top','B_top'], mid:['mid','mid'], bot:['A_bot','B_bot'], river:['dragon','baron'],
+};
+function walkNodeRegion(node:string):EngRegion{
+ if(node==='A_base'||node==='B_base'||node==='A_ft'||node==='B_ft')return 'base';
+ if(node==='baron'||node==='dragon')return 'river';
+ if(/top/i.test(node))return 'top';
+ if(/bot/i.test(node))return 'bot';
+ return 'mid';
+}
+// WALK 그래프 최단 거리(map-unit) → 보정된 이동 초.
+function walkSeconds(from:string,to:string,speed=0.9):number{
+ return pathLen(route(from,to).map(n=>WN[n]))/(speed*TRAVEL_K);
+}
+// 엔진 표 vs 미니맵: 대표 지역쌍의 이동 시간을 비교한다(디버그·검증용, 결정적).
+export function travelAudit():{pair:string,engine:number,walk:number,ratio:number}[]{
+ const regs=Object.keys(REGION_DIST) as EngRegion[];
+ const out:{pair:string,engine:number,walk:number,ratio:number}[]=[];
+ for(let i=0;i<regs.length;i++)for(let j=i+1;j<regs.length;j++){
+  const f=regs[i],t=regs[j], eng=REGION_DIST[f][t];
+  const w=walkSeconds(REGION_NODE[f][0],REGION_NODE[t][0]);
+  out.push({pair:`${f}->${t}`,engine:eng,walk:Math.round(w*10)/10,ratio:eng?Math.round(w/eng*100)/100:0});
+ }
+ return out;
+}
+
 // ── 결정적 난수(replay 전용) — SetResult 내용에서만 시드 유도 ────────────────────────────
 function hashStr(s:string):number{let h=2166136261>>>0;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)>>>0;}return h>>>0;}
 function mulberry32(seed:number){let a=seed>>>0;return ()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
@@ -139,6 +175,7 @@ export type ReplayData={
  nav:{segs:[Vec,Vec][]},          // 디버그: 보행 가능 영역(통로 선분)
  diag:string[],                   // 이동 시간 ↔ 사건 일정 충돌 등 진단
  scale:number,                    // 경기 시계 → 재생 시각 나눗수
+ travel:{k:number, lateJoins:number, farJoins:number, ratioMedian:number}, // 엔진 REGION_DIST 대조 요약
 };
 
 // ── 사건이 벌어지는 WALK 노드명(엔진 데이터 기반). 모두 도달 가능한 통로 노드. ──────────
@@ -191,7 +228,7 @@ type Agent={
  pendingDest:string|null,
  lane:0|1|2, jgIdx:number, pushBias:number,
 };
-const SPEED:Record<Slot,number>={0:0.84,1:1.06,2:0.88,3:0.82,4:0.92}; // map-unit / engine-second
+const SPEED:Record<Slot,number>={0:0.84,1:1.06,2:0.88,3:0.82,4:0.92}; // 기본 map-unit / engine-second (TRAVEL_K로 엔진 REGION_DIST 크기에 맞춰 보정)
 const WADJ=WALK.adj;
 function route(from:string,to:string):string[]{ return dijkstra(WADJ,WN,from,to); }
 
@@ -213,23 +250,37 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
  const evInfo=events.map((e,i)=>{
   const cb=e.combat;
   const prevClk=i>0?(events[i-1].combat?.clock??0):0;
-  const clock:number=cb?cb.clock:(i>0?prevClk+180:180);
+  const eclock:number=cb?cb.clock:(i>0?prevClk+180:180);   // 엔진 시각(불변)
   const node=eventNodeName(e);
   const parts:Ref[]=cb?cb.participants.map((p:any)=>({side:p.side,slot:p.slot as Slot})):
    ([0,1,2,3,4].flatMap(s=>[{side:'A' as Side,slot:s as Slot},{side:'B' as Side,slot:s as Slot}]));
-  return {e,cb,clock,node,parts,kills:(cb?cb.kills:[]) as any[],
+  return {e,cb,eclock,stime:eclock,node,parts,kills:(cb?cb.kills:[]) as any[],
    notJoined:((cb?.notJoined??[]) as any[]).map(n=>n.ref as Ref),idx:e.index as number,
-   armed:false,done:false,lead:0,tail:0};
+   armed:false,done:false,lead:0,tail:0,showDelay:0};
  });
- evInfo.sort((a,b)=>a.clock-b.clock);
- const endClock=(evInfo.at(-1)?.clock??600)+70;
+ evInfo.sort((a,b)=>a.eclock-b.eclock);
+ // 화면 시각(stime): 엔진이 한타 뒤 14s에 붙여 놓은 공성처럼, 실제 이동 시간(REGION_DIST)이 사건 간격보다
+ // 길면 그만큼 화면 사건을 늦춘다 → 참가자가 순간이동 대신 실제로 걸어서 도착한다. 엔진 판정은 불변.
+ for(let i=0;i<evInfo.length;i++){
+  const ev=evInfo[i], prev=evInfo[i-1];
+  if(prev && prev.node!==ev.node){
+   // 실제 미니맵 이동 시간(WALK) 기준. 엔진 간격이 그보다 짧으면 그 차이만큼 화면 사건을 늦춘다.
+   // (엔진 판정·engineClock은 불변. 늦추는 건 화면 렌더 시각뿐 — 참가자가 순간이동 대신 실제로 걷게.)
+   const need=walkSeconds(prev.node,ev.node)*1.2+10;   // 이동 + 교전 정지 여유
+   const gap=ev.eclock-prev.eclock;
+   if(gap<need) ev.showDelay=Math.min(34,Math.round(need-gap));
+  }
+  ev.stime=ev.eclock+ev.showDelay;
+  if(ev.stime<=(evInfo[i-1]?.stime??-1)) ev.stime=(evInfo[i-1]!.stime)+2; // 단조 보장
+ }
+ const endClock=(evInfo.at(-1)?.stime??600)+70;
  const T=(clock:number)=>clock/SCALE;
 
  const agents:Agent[]=[];
  for(const side of ['A','B'] as Side[]) for(let s=0;s<5;s++){
   const sl=s as Slot;
   agents.push({side,slot:sl,route:[homeNode(side,sl)],seg:0,segT:0,fixedPos:null,
-   act:'lane',speed:SPEED[sl],nextDecide:0,alive:true,respawnAt:0,plan:null,pendingDest:null,
+   act:'lane',speed:SPEED[sl]*TRAVEL_K,nextDecide:0,alive:true,respawnAt:0,plan:null,pendingDest:null,
    lane:(sl===0?0:sl<=2?1:2) as 0|1|2, jgIdx:sl===1?(side==='A'?1:0):0, pushBias:0});
  }
  const ag=(r:Ref)=>agents.find(a=>a.side===r.side&&a.slot===r.slot)!;
@@ -276,7 +327,7 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
  // 다가오는 큰 교전(오브·한타): 참가 예정이면 미리 그쪽으로 드리프트(정식 계획 이전).
  const groupSoon=(a:Agent,clock:number)=>evInfo.find(x=>!x.done
   && (x.cb?.kind==='teamfight'||x.cb?.kind==='objective')
-  && x.clock>clock && x.clock-clock<58
+  && x.stime>clock && x.stime-clock<58
   && x.parts.some(p=>p.side===a.side&&p.slot===a.slot)
   && !x.notJoined.some(n=>n.side===a.side&&n.slot===a.slot));
 
@@ -290,8 +341,8 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
   const pickDiff=(cands:string[],fallback:string)=>{ const c=cands.filter(n=>n&&n!==here); return c.length?c[Math.floor(rng()*c.length)]:fallback; };
 
   if(a.slot===1){ // 정글: 캠프 순찰(항상 이동) / 오브·갱킹 접근
-   const objSoon=evInfo.find(x=>!x.done&&x.cb?.kind==='objective'&&x.clock>clock&&x.clock-clock<52);
-   const gankSoon=evInfo.find(x=>!x.done&&x.cb&&x.cb.lane!=null&&x.clock>clock&&x.clock-clock<42&&x.parts.some(p=>p.side===a.side&&p.slot===1));
+   const objSoon=evInfo.find(x=>!x.done&&x.cb?.kind==='objective'&&x.stime>clock&&x.stime-clock<52);
+   const gankSoon=evInfo.find(x=>!x.done&&x.cb&&x.cb.lane!=null&&x.stime>clock&&x.stime-clock<42&&x.parts.some(p=>p.side===a.side&&p.slot===1));
    let dest:string, why:string, act:Act;
    if(objSoon){ dest=objSoon.node; why='오브 준비'; act='roam'; }
    else if(gankSoon){ dest=laneRefs(gankSoon.cb.lane as 0|1|2,a.side).contest; why='갱킹 접근'; act='roam'; }
@@ -323,7 +374,7 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
   const adv=lateAdv()*(a.side==='A'?1:-1)/28;
   a.pushBias=Math.max(-1,Math.min(1, bBias + adv + jit(0.10) ));
   const L=laneRefs(lane,a.side), chain=[L.own,L.safe,L.contest,L.push,L.deep];
-  const threat=evInfo.find(x=>!x.done&&x.cb?.lane===lane&&x.clock>clock&&x.clock-clock<22&&x.parts.some(p=>p.side!==a.side&&p.slot===1));
+  const threat=evInfo.find(x=>!x.done&&x.cb?.lane===lane&&x.stime>clock&&x.stime-clock<22&&x.parts.some(p=>p.side!==a.side&&p.slot===1));
   if(threat){ headTo(a,L.own,true); a.act='retreat'; a.nextDecide=clock+9+jit(3); emit(a,clock,'move','정글 위험 감지'); return; }
   // farm zone: pushBias(라인 승패·advantage·소량 난수)로 중심을 정하고 그 부근 2~3 노드를 오간다.
   // 고정 왕복이 아니라, zone 중심이 경기 상황에 따라 라인 위를 드리프트한다.
@@ -353,54 +404,56 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
    a.nextDecide=clock+3;                 // 분수대에서 잠깐 → 이후 movement 루프의 decide가 라인/정글로 내보냄
   }
   for(const ev of evInfo){
-   if(!ev.armed || ev.done || clock<ev.clock) continue;
+   if(!ev.armed || ev.done || clock<ev.stime) continue;
    ev.done=true;
-   const cb=ev.cb, evPos=WN[ev.node];
-   const evT=Math.max(ev.clock,clock);   // 재생 시각: 사건 발생 시각과 현재 tick 중 늦은 쪽(같은 tick 내 사망이 먼저 찍히는 것 방지)
+   const cb=ev.cb, evPos=WN[ev.node], EC=ev.eclock;
+   const evT=Math.max(ev.stime,clock);   // 화면 시각: stime과 현재 tick 중 늦은 쪽(같은 tick 내 사망이 먼저 찍히는 것 방지)
    for(const r of ev.parts){
-    const a=ag(r); if(!a.alive || ev.notJoined.some(n=>n.side===r.side&&n.slot===r.slot)) continue;
+    const a=ag(r); if(ev.notJoined.some(n=>n.side===r.side&&n.slot===r.slot)) continue;
+    if(!a.alive){ // 엔진은 참가자로 셌지만 미니맵 타임라인에선 사망 상태 — 숨기지 않고 기록
+     diag.push(`#${ev.idx}: ${r.side}${r.slot} 엔진 참가자이나 미니맵 사망(부활 대기)`); continue; }
     const d=dist(posOf(a),evPos);
-    if(d<=5){                                   // 이미 도착 — 그 자리에서 교전(순간이동 없음)
+    if(d<=6){                                   // 이미 도착 — 그 자리에서 교전(순간이동 없음)
      a.fixedPos=evPos.slice() as Vec; a.act='fight'; a.plan=null;
-     fightUntil[r.side+r.slot]=ev.clock+ev.tail;
+     fightUntil[r.side+r.slot]=ev.stime+ev.tail;
      emit(a,evT,'fight',`#${ev.idx} 교전`);
-    }else if(d<=26){                            // 근처 — 현재 위치에서 실제 경로로 계속 이동해 합류(도착 시 fight)
-     headTo(a,ev.node); a.act='group'; a.plan=null;   // headTo가 현재 구간 보존(역주행·순간이동 없음)
-     arriving[r.side+r.slot]={node:ev.node,until:ev.clock+ev.tail,seq:ev.idx};
-     emit(a,evT,'move',`#${ev.idx} 합류 중`);
-     diag.push(`#${ev.idx}: ${r.side}${r.slot} 합류 이동(거리 ${d.toFixed(0)})`);
     }else{
-     diag.push(`#${ev.idx}: ${r.side}${r.slot} 합류 실패(거리 ${d.toFixed(0)})`);
+     // 아직 못 왔다 — 현재 위치에서 실제 경로로 계속 이동해 합류한다(순간이동 금지).
+     // 엔진은 이미 교전 중이므로 화면은 '엔진 교전 반영 중'으로 명시(모순을 숨기지 않는다).
+     headTo(a,ev.node); a.act='group'; a.plan=null;
+     arriving[r.side+r.slot]={node:ev.node,until:ev.stime+ev.tail+(d>34?18:0),seq:ev.idx};
+     emit(a,evT,'move',`#${ev.idx} 합류 중(엔진 교전 반영)`);
+     diag.push(`#${ev.idx}: ${r.side}${r.slot} ${d>34?'원거리 ':''}합류 이동(거리 ${d.toFixed(0)}, T=${Math.round(EC)}s${ev.showDelay?` +지연 ${ev.showDelay}s`:''})`);
     }
    }
-   beats.push({t:T(evT),seq:ev.idx,engineClock:ev.clock,kind:'engage',side:cb?cb.side:'A',text:`${ev.e.title} — 교전`});
-   beats.push({t:T(evT)+0.05,seq:ev.idx,engineClock:ev.clock,kind:'line',text:ev.e.detail,side:cb?cb.side:undefined});
+   beats.push({t:T(evT),seq:ev.idx,engineClock:EC,kind:'engage',side:cb?cb.side:'A',text:`${ev.e.title} — 교전`});
+   beats.push({t:T(evT)+0.05,seq:ev.idx,engineClock:EC,kind:'line',text:ev.e.detail,side:cb?cb.side:undefined});
    if(cb?.committed){ const jr=cb.participants.find((p:any)=>p.slot===1);
-    if(jr) beats.push({t:T(evT)-0.1,seq:ev.idx,engineClock:ev.clock,kind:'approach',side:cb.side,
+    if(jr) beats.push({t:T(evT)-0.1,seq:ev.idx,engineClock:EC,kind:'approach',side:cb.side,
      ref:{side:jr.side,slot:1},text:`정글 합류 (${cb.lane===0?'탑':cb.lane===1?'미드':'바텀'})`}); }
-   for(const nj of (cb?.notJoined??[])) beats.push({t:T(evT)-0.05,seq:ev.idx,engineClock:ev.clock,kind:'noshow',
+   for(const nj of (cb?.notJoined??[])) beats.push({t:T(evT)-0.05,seq:ev.idx,engineClock:EC,kind:'noshow',
     ref:{side:nj.ref.side,slot:nj.ref.slot},text:`불참 · ${nj.reason}`});
    (ev.kills as any[]).forEach((k,ki)=>{
     const kt=evT+ki*3;
     scoreA+=k.killer.side==='A'?1:0; scoreB+=k.killer.side==='B'?1:0;
-    beats.push({t:T(kt),seq:ev.idx,engineClock:ev.clock,kind:'kill',
+    beats.push({t:T(kt),seq:ev.idx,engineClock:EC,kind:'kill',
      ref:{side:k.victim.side,slot:k.victim.slot},by:{side:k.killer.side,slot:k.killer.slot},
      assists:(k.assists??[]).map((x:any)=>({side:x.side,slot:x.slot})),
      side:k.killer.side,scoreDelta:[k.killer.side==='A'?1:0,k.killer.side==='B'?1:0],
      fb:!!cb.firstBlood&&ki===0,text:cb.firstBlood&&ki===0?'FIRST BLOOD':'처치'});
     const v=ag({side:k.victim.side,slot:k.victim.slot});
-    v.alive=false; v.respawnAt=ev.clock+RESPAWN(ev.clock)+ki*4; v.plan=null; v.pendingDest=null;
+    v.alive=false; v.respawnAt=ev.stime+RESPAWN(EC)+ki*4; v.plan=null; v.pendingDest=null;
     delete fightUntil[v.side+v.slot]; delete arriving[v.side+v.slot];
     v.fixedPos=evPos.slice() as Vec; v.act='dead';
     emit(v,kt,'dead','처치됨');
    });
    if(!cb && ev.e.kills){
-    if(ev.e.kills.a){scoreA+=ev.e.kills.a;beats.push({t:T(evT),seq:ev.idx,engineClock:ev.clock,kind:'kill',side:'A',scoreDelta:[ev.e.kills.a,0],text:`교전 ${ev.e.kills.a}킬`});}
-    if(ev.e.kills.b){scoreB+=ev.e.kills.b;beats.push({t:T(evT)+0.1,seq:ev.idx,engineClock:ev.clock,kind:'kill',side:'B',scoreDelta:[0,ev.e.kills.b],text:`교전 ${ev.e.kills.b}킬`});}
+    if(ev.e.kills.a){scoreA+=ev.e.kills.a;beats.push({t:T(evT),seq:ev.idx,engineClock:EC,kind:'kill',side:'A',scoreDelta:[ev.e.kills.a,0],text:`교전 ${ev.e.kills.a}킬`});}
+    if(ev.e.kills.b){scoreB+=ev.e.kills.b;beats.push({t:T(evT)+0.1,seq:ev.idx,engineClock:EC,kind:'kill',side:'B',scoreDelta:[0,ev.e.kills.b],text:`교전 ${ev.e.kills.b}킬`});}
    }
-   for(const es of (cb?.escaped??[])) beats.push({t:T(evT),seq:ev.idx,engineClock:ev.clock,kind:'escape',ref:{side:es.side,slot:es.slot},text:'생존·이탈'});
+   for(const es of (cb?.escaped??[])) beats.push({t:T(evT),seq:ev.idx,engineClock:EC,kind:'escape',ref:{side:es.side,slot:es.slot},text:'생존·이탈'});
    if(cb?.kind==='objective'&&cb.objective.secured)
-    beats.push({t:T(evT)+0.15,seq:ev.idx,engineClock:ev.clock,kind:'secure',side:cb.objective.secured,
+    beats.push({t:T(evT)+0.15,seq:ev.idx,engineClock:EC,kind:'secure',side:cb.objective.secured,
      text:`${cb.objective.kind==='herald'?'전령':'드래곤'} 확보`});
    if(cb?.kind==='siege'&&cb.siege){
     const sg=cb.siege, laneKor=['탑','미드','바텀'][sg.lane]??'베이스';
@@ -409,13 +462,21 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
     if(defS==='A')structState.baseA=sg.baseTurretsAfter; else structState.baseB=sg.baseTurretsAfter;
     if(sg.nexus){ if(defS==='A')structState.nexusA=true; else structState.nexusB=true; }
     const snap:StructSnapshot={A:[...structState.A],B:[...structState.B],baseA:structState.baseA,baseB:structState.baseB,nexusA:structState.nexusA,nexusB:structState.nexusB};
-    beats.push({t:T(evT)+0.2,seq:ev.idx,engineClock:ev.clock,kind:sg.nexus?'nexus':'siege',side:sg.side,struct:snap,
+    beats.push({t:T(evT)+0.2,seq:ev.idx,engineClock:EC,kind:sg.nexus?'nexus':'siege',side:sg.side,struct:snap,
      text: sg.structuresDown>0
       ? (sg.nexus?`${sg.side} 넥서스 파괴`:`${sg.side} ${laneKor} ${sg.result==='INHIB'?'억제기 파괴':`포탑 ${sg.structuresDown} 철거`}`)
       : (sg.result==='NO_WINDOW'?`${sg.side} 공성 중단 (부활 복귀)`:sg.result==='RESET'?'양 팀 정비':`${sg.side} 공성 무산`)});
    }
    goldKeys.push({t:T(evT)+0.1,a:ev.e.goldA??goldKeys[goldKeys.length-1].a,b:ev.e.goldB??goldKeys[goldKeys.length-1].b});
-   for(const r of ev.parts){ const a=ag(r); if(a.alive) a.plan=null; }
+   // 사건 종료 후: 곧바로 다음 사건(엔진이 붙여 놓은 공성·연장)이 armed면 그쪽으로 재계획한다.
+   // 그래야 한타→공성 사이 좁은 시간에도 참가자가 미리 이동을 시작한다(순간이동 대신 실제 이동).
+   for(const r of ev.parts){ const a=ag(r);
+    if(!a.alive || fightUntil[r.side+r.slot]!==undefined || arriving[r.side+r.slot]) continue; // 아직 이 사건 교전 중 → 다음 계획은 교전 종료 후
+    const nxt=evInfo.find(x=>x.armed&&!x.done&&x.stime>=ev.stime
+     &&x.parts.some(p=>p.side===r.side&&p.slot===r.slot)
+     &&!x.notJoined.some(n=>n.side===r.side&&n.slot===r.slot));
+    a.plan=nxt?{ev:nxt.idx,node:nxt.node}:null;
+   }
   }
 
   while(ei<evInfo.length){
@@ -423,16 +484,22 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
    const pa=ev.parts.map(ag).filter(a=>a.alive && !ev.notJoined.some(n=>n.side===a.side&&n.slot===a.slot));
    const maxTravel=Math.max(0,...pa.map(a=>pathLen(route(curNode(a),ev.node).map(n=>WN[n]))/a.speed));
    const big=ev.cb?.kind==='teamfight'||ev.cb?.kind==='objective';
-   const lead=Math.max(14,Math.min(big?125:80, maxTravel*(big?1.5:1.3)+(big?18:10)));
-   if(clock < ev.clock-lead) break;
+   // 접근 lead = 실제 이동 시간을 덮도록. 시작을 앞당길 뿐(과속 아님). t=clock/SCALE라 175s ≈ 재생 9.7s.
+   const lead=Math.max(14,Math.min(big?175:120, maxTravel*(big?1.35:1.25)+(big?20:12)));
+   if(clock < ev.stime-lead) break;
    for(const a of pa){
-    a.plan={ev:ev.idx,node:ev.node};
+    if(fightUntil[a.side+a.slot]!==undefined || arriving[a.side+a.slot]) continue; // 다른 사건 교전/합류 중 — 이번 tick 재계획·이동 지시 금지(같은 tick 키프레임 충돌 방지)
+    // 계획은 '지금 참가할 가장 이른(아직 미해소) 사건'으로 — 늦은 사건이 이른 사건 계획을 덮어쓰지 않게.
+    const cur=a.plan?evInfo.find(x=>x.idx===a.plan!.ev):undefined;
+    if(!cur || cur.done || cur.stime>ev.stime) a.plan={ev:ev.idx,node:ev.node};
     decide(a,clock);
     const eta=clock+pathLen(a.route.slice(a.seg).map(n=>WN[n]))/a.speed;
-    if(eta>ev.clock+4) diag.push(`#${ev.idx} @${Math.round(ev.clock)}s: ${a.side}${a.slot} 이동시간 부족(도착 ~${Math.round(eta)}s, lead ${Math.round(lead)})`);
+    if(eta>ev.stime+8) diag.push(`#${ev.idx} @${Math.round(ev.eclock)}s: ${a.side}${a.slot} 이동시간 부족(도착 ~${Math.round(eta)}s, lead ${Math.round(lead)})`);
    }
-   ev.tail=8+ev.kills.length*5; ev.lead=lead; ev.armed=true;
-   windows.push({seq:ev.idx,start:T(ev.clock-lead),end:T(ev.clock+ev.tail),engineClock:ev.clock,
+   // 교전 정지 창(tail)이 다음 사건까지 걸어갈 시간을 남긴다(연속 한타→공성에서 참가자가 실제로 이동).
+   ev.tail=Math.max(5,Math.min(8+ev.kills.length*5,(evInfo[ei+1]?.stime??Infinity)-ev.stime-14));
+   ev.lead=lead; ev.armed=true;
+   windows.push({seq:ev.idx,start:T(ev.stime-lead),end:T(ev.stime+ev.tail),engineClock:ev.eclock,
     label:ev.e.title,kind:ev.cb?ev.cb.kind:'teamfight'});
    ei++;
   }
@@ -452,13 +519,13 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
    }
    const arr=arriving[kk];
    if(arr){
-    // 합류 이동 중 — 경로 그대로 진행하다 도착(≤4u)하거나 창이 닫히면 처리.
+    // 합류 이동 중 — 경로 그대로 진행하다 도착(≤5u)하거나 창이 닫히면 처리.
     if(clock>=arr.until){ delete arriving[kk]; a.act='retreat'; emit(a,clock,'move','합류 무산 — 복귀'); decide(a,clock+0.01); }
-    else if(dist(posOf(a),WN[arr.node])<=4){
+    else if(dist(posOf(a),WN[arr.node])<=5){
      delete arriving[kk]; a.fixedPos=WN[arr.node].slice() as Vec; a.act='fight';
      fightUntil[kk]=arr.until; emit(a,clock,'fight',`#${arr.seq} 합류·교전`); continue;
     }
-    // else: 아래 이동 루프로 계속 전진
+    // else: 아래 이동 루프로 계속 전진(엔진은 이미 교전 — 화면은 잔여 이동을 그대로 보여준다)
    }
    // 판단 먼저(현재 위치 기준) → 그 다음 이동. 키프레임 시각·위치 순서 일관.
    if(!arriving[kk] && clock>=a.nextDecide){
@@ -466,7 +533,7 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
     if(nearNode) decide(a,clock);
     else a.nextDecide=clock+2;
    }
-   const budget0=a.speed*DT; let budget=budget0;
+   const budget0=a.speed*DT; let budget=budget0; const p0=posOf(a);
    while(budget>1e-6 && a.seg<a.route.length-1){
     const A=WN[a.route[a.seg]], B=WN[a.route[a.seg+1]];
     const segLen=dist(A,B)||0.001;
@@ -480,16 +547,27 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
     } else { a.segT+=budget/segLen; budget=0; }
    }
    if(a.seg>=a.route.length-1) a.segT=1;
+   // 긴 단일 구간을 한 tick에 크게 이동했으면(노드 미통과라 위 '경유'가 안 찍힘) tick 끝에 키프레임을 남긴다.
+   // 그래야 다음 재생 샘플이 위치를 선형 보간으로 따라잡아 '한 스텝 폭증'으로 보이지 않는다.
+   if(dist(p0,posOf(a))>3 && a.act!=='fight') emit(a,clock+DT*0.999,'move','이동');
   }
  }
- for(const a of agents) emit(a,endClock,a.alive?'idle':'dead','경기 종료');
+ // 종료 키프레임은 루프 마지막 tick과 시각이 겹치지 않게 뒤로 띄운다(겹치면 dedup이 직전 키프레임을 덮어써 폭증처럼 보임).
+ for(const a of agents) emit(a,endClock+4,a.alive?'idle':'dead','경기 종료');
 
- const duration=T(endClock)+0.6;
+ const duration=T(endClock+4)+0.6;
  beats.sort((x,y)=>x.t-y.t);
  for(const tr of tracks) tr.key.sort((a,b)=>a.t-b.t);
  windows.sort((a,b)=>a.start-b.start);
+ // 엔진 REGION_DIST 대조 요약(순간이동·과속으로 숨기지 않는다 — diag에 상세, 여기에 집계).
+ const aud=travelAudit(), rr=aud.map(x=>x.ratio).filter(x=>x>0).sort((a,b)=>a-b);
+ const travel={k:TRAVEL_K,
+  lateJoins:diag.filter(d=>d.includes('합류 이동')).length,
+  farJoins:diag.filter(d=>d.includes('원거리 합류')).length,
+  ratioMedian:rr.length?rr[rr.length>>1]:0};
+ diag.unshift(`이동 대조: TRAVEL_K=${TRAVEL_K} · WALK/REGION_DIST 비율 중앙값 ${travel.ratioMedian} · 지연 합류 ${travel.lateJoins}(원거리 ${travel.farJoins})`);
  return {duration,windows,tracks,beats,goldKeys,finalScore:[scoreA,scoreB],
-  nav:{segs:WALK_SEGS.map(([a,b])=>[a.slice() as Vec,b.slice() as Vec])},diag,scale:SCALE};
+  nav:{segs:WALK_SEGS.map(([a,b])=>[a.slice() as Vec,b.slice() as Vec])},diag,scale:SCALE,travel};
 }
 
 // ── 재생 시각 t에서의 이산 상태(탐색·되감기·스포일러 방지) ──────────────────────────────

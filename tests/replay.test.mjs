@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {newGame,upgradeGame,simulateSet} from '../lib/game.ts';
-import {buildReplay,stateAt,posAt,agentsAt,MAP,WALK,pathBetween,distToCorridor,WALL_TOL} from '../lib/simulation/replay.ts';
+import {buildReplay,stateAt,posAt,agentsAt,MAP,WALK,pathBetween,distToCorridor,WALL_TOL,travelAudit,TRAVEL_K} from '../lib/simulation/replay.ts';
+import {REGION_DIST} from '../lib/simulation/combat.ts';
 
 const g=upgradeGame(newGame('nva',7));
 const M={id:'r',a:'nva',b:'crn',bestOf:3,scoreA:0,scoreB:0,sets:[],label:'R1'};
@@ -54,7 +55,9 @@ const edgeSet=new Set(MAP.edges.flatMap(([a,b])=>[a+'|'+b,b+'|'+a]));
       `이동/대기 위치가 통로 위 (seed ${seed}, ${tr.side}${tr.slot} @${t.toFixed(1)}s d=${distToCorridor(pos).toFixed(1)})`);
      if(prev){
       const step=Math.hypot(pos[0]-prev[0],pos[1]-prev[1]);
-      assert.ok(step<8,`한 스텝 이동이 폭증하지 않음 (seed ${seed}, ${tr.side}${tr.slot} @${t.toFixed(1)}s step=${step.toFixed(1)})`);
+      // 요구 변경(D018): TRAVEL_K로 미니맵 속도를 엔진 REGION_DIST에 맞추면서 스텝 크기가 커졌다.
+      // 0.25s 재생 = 4.5 엔진초 × 최대 속도(≈2.76) ≈ 12.4u. 폭증/순간이동 감지 목적이므로 상한 16u.
+      assert.ok(step<16,`한 스텝 이동이 폭증하지 않음 (seed ${seed}, ${tr.side}${tr.slot} @${t.toFixed(1)}s step=${step.toFixed(1)})`);
      }
     }
     prev=(state==='dead'||state==='fight')?null:pos; prevT=t;
@@ -252,4 +255,54 @@ function eventNodeOf(e){
  for(const a of A)assert.ok(Array.isArray(a.path)&&a.path.length>=1&&typeof a.act==='string','agentsAt 필드');
 }
 
-console.log('PASS replay: determinism, no-spoiler & timing sync, corridor-constrained motion, no post-death/early-revive, absent players, fixed-seed cases, map graph, unit-5 siege, MINIMAP-02 persistent agents (no freeze / continuity / independent lanes)');
+// --- 10. 엔진 REGION_DIST ↔ 미니맵 WALK 이동 시간 대조 (모순을 순간이동/과속으로 숨기지 않는다) ---
+{
+ // (a) 대표 지역쌍: 미니맵 이동 시간이 엔진 표와 같은 크기대(위상 차이로 정확히는 아님).
+ //     허용치: 대부분 0.5~2.0배 안. 통로 우회로 큰 쌍(top↔river)은 명시적으로 예외 기록.
+ const aud=travelAudit();
+ assert.ok(aud.length>0&&TRAVEL_K>1,'travelAudit 제공, 보정 계수 존재');
+ let within=0, exceptions=[];
+ for(const r of aud){
+  assert.ok(r.engine>0&&r.walk>0,`${r.pair} 두 모델 모두 양수`);
+  if(r.ratio>=0.5&&r.ratio<=2.05) within++;
+  else exceptions.push(`${r.pair}(비율 ${r.ratio})`);
+ }
+ assert.ok(within/aud.length>=0.8,`지역쌍 이동 시간 80%+ 정렬 (정렬 ${within}/${aud.length}, 예외 ${exceptions.join(', ')})`);
+ // (b) 큰 차이는 순서 보존: 엔진이 8s+ 더 먼 쌍은 미니맵에서도 더 멀다(±10 slack, river 우회쌍 제외).
+ //     두 모델은 위상이 달라(하드 오써링된 표 vs 기하 그래프) 근소한 쌍의 순서까지는 맞추지 않는다.
+ const norm=aud.filter(r=>!/top->river|river->top/.test(r.pair));
+ for(let i=0;i<norm.length;i++)for(let j=0;j<norm.length;j++){
+  if(norm[j].engine-norm[i].engine>=8)
+   assert.ok(norm[i].walk<=norm[j].walk+10,`큰 차이 순서 보존 (${norm[i].pair} ${norm[i].walk}s vs ${norm[j].pair} ${norm[j].walk}s)`);
+ }
+ // (c) 사건 시각에 '논리 도착 vs 화면 이동 중' 모순을 숨기지 않는다:
+ //     - showDelay(엔진 REGION_DIST 기준)로 화면 사건을 늦춰 참가자가 실제로 걸어서 합류하게 한다.
+ //     - 그래도 남는 '합류 이동'은 전부 diag에 거리·지연과 함께 기록된다(순간이동·과속 금지).
+ //     - 참가자는 창 종료까지 fight에 도달하거나 / 사망이거나 / diag에 합류 이동으로 명시된다.
+ for(const seed of [0,17,42,88,120,240,404,555]){
+  const set=runSet(seed); const rd=buildReplay(set);
+  assert.ok(rd.travel&&rd.travel.k===TRAVEL_K,'rd.travel 요약 존재');
+  assert.ok(rd.diag[0]&&rd.diag[0].startsWith('이동 대조'),'diag 첫 줄 = 이동 대조 요약');
+  // 원거리 합류는 '전부 로그된다'가 핵심(숨기지 않는다). 건수는 유한.
+  assert.ok(rd.travel.farJoins<=45,`원거리 합류가 폭주하지 않음 (seed ${seed}, ${rd.travel.farJoins})`);
+  const loggedFar=rd.diag.filter(d=>d.includes('원거리 합류 이동')).length;
+  assert.equal(loggedFar,rd.travel.farJoins,`원거리 합류는 전부 diag에 기록 (seed ${seed})`);
+  for(const e of set.events){
+   const cb=e.combat; if(!cb)continue;
+   const w=rd.windows.find(x=>x.seq===e.index); if(!w)continue;
+   const nj=new Set((cb.notJoined||[]).map(n=>n.ref.side+n.ref.slot));
+   for(const p of cb.participants){
+    if(nj.has(p.side+p.slot))continue;
+    const tr=rd.tracks.find(t=>t.side===p.side&&t.slot===p.slot);
+    // 창 종료 시점: fight 도달했거나(정상), 죽었거나, diag에 이 사건 합류 이동 기록이 있어야 한다.
+    const atEnd=posAt(tr,w.end-0.05);
+    const reachedFight=tr.key.some(k=>k.state==='fight'&&k.t>=w.start-0.01&&k.t<=w.end+0.2);
+    const logged=rd.diag.some(d=>d.startsWith(`#${e.index}:`)&&d.includes(`${p.side}${p.slot}`));
+    assert.ok(reachedFight||atEnd.state==='dead'||logged,
+     `#${e.index} ${p.side}${p.slot}: 도착하거나(fight) 사망이거나 diag에 합류 이동 기록 (seed ${seed})`);
+   }
+  }
+ }
+}
+
+console.log('PASS replay: determinism, no-spoiler & timing sync, corridor-constrained motion, no post-death/early-revive, absent players, fixed-seed cases, map graph, unit-5 siege, MINIMAP-02 persistent agents, REGION_DIST travel-time cross-check');

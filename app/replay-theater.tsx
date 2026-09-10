@@ -8,6 +8,26 @@ type SetLike={events:any[],lineupA:string[],lineupB:string[],draft:{picksA:strin
 
 const ACT_KO:Record<string,string>={lane:'라인',jungle:'정글',roam:'로밍',group:'집결',fight:'교전',retreat:'후퇴',recall:'귀환',base:'부활',dead:'사망'};
 
+// ── 구조물 위치(SVG 좌표). 데이터가 지원하는 만큼만 — struct[lane]∈0..3(외곽/내곽/억제기), base 2→0, nexus bool. ──
+const N=MAP.nodes, lerp=(a:number[],b:number[],t:number):[number,number]=>[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t];
+// 팀별·라인별 [외곽, 내곽, 억제기] 좌표(자기 베이스 쪽에서 바깥으로). 통로 위.
+const STR={
+ A:{ turret:[
+   [lerp(N.A_top,N.top_mid,0.16), N.A_top, lerp(N.A_base,N.A_top,0.58)],
+   [lerp(N.A_mid,N.mid,0.34), N.A_mid, lerp(N.A_base,N.A_mid,0.52)],
+   [lerp(N.A_bot,N.bot_mid,0.16), N.A_bot, lerp(N.A_base,N.A_bot,0.55)],
+  ] as [number,number][][],
+  nexT:[[N.A_base[0]-3.4,N.A_base[1]-1.2],[N.A_base[0]+1.2,N.A_base[1]+3.4]] as [number,number][],
+  nex:[N.A_base[0]+0.5,N.A_base[1]+0.5] as [number,number] },
+ B:{ turret:[
+   [lerp(N.B_top,N.top_mid,0.16), N.B_top, lerp(N.B_base,N.B_top,0.58)],
+   [lerp(N.B_mid,N.mid,0.34), N.B_mid, lerp(N.B_base,N.B_mid,0.52)],
+   [lerp(N.B_bot,N.bot_mid,0.16), N.B_bot, lerp(N.B_base,N.B_bot,0.55)],
+  ] as [number,number][][],
+  nexT:[[N.B_base[0]+3.4,N.B_base[1]+1.2],[N.B_base[0]-1.2,N.B_base[1]-3.4]] as [number,number][],
+  nex:[N.B_base[0]-0.5,N.B_base[1]-0.5] as [number,number] },
+};
+
 // 위치는 rAF에서 DOM 직접 갱신. 이산 상태(점수·골드·피드·중계·구조물)만 저압축 리렌더.
 export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEnd,onProgress}:{
  set:SetLike, teamA:string, teamB:string, mineIsA:boolean,
@@ -91,6 +111,28 @@ export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEn
  // 통로(WALK) — 디버그에서 보행 가능 영역
  const navLines=useMemo(()=>rd.nav.segs.map((s,i)=><line key={i} x1={s[0][0]} y1={s[0][1]} x2={s[1][0]} y2={s[1][1]} className="rt-nav"/>),[rd]);
  const edgeLines=MAP.edges.map(([x,y],i)=>{const a=MAP.nodes[x],b=MAP.nodes[y];return <line key={i} x1={a[0]} y1={a[1]} x2={b[0]} y2={b[1]} className="rt-corridor"/>;});
+ // 구조물 레이어: snap.struct(현재 재생 시각까지 집계된 상태)에서만 그린다 → 미래 사건 상태 미노출.
+ const structLayer=useMemo(()=>{
+  const st=snap.struct;
+  const out:any[]=[];
+  for(const S of ['A','B'] as const){
+   const col=S==='A'?colA:colB, prog=st[S], baseN=S==='A'?st.baseA:st.baseB, nex=S==='A'?st.nexusA:st.nexusB;
+   for(let L=0;L<3;L++) for(let j=0;j<3;j++){
+    const [x,yy]=STR[S].turret[L][j], down=prog[L]>j, inhib=j===2;
+    out.push(inhib
+     ? <rect key={`${S}${L}${j}`} x={x-1.5} y={yy-1.5} width={3} height={3} transform={`rotate(45 ${x} ${yy})`}
+         className={`rt-inhib${down?' down':''}`} style={down?undefined:{fill:col}}/>
+     : <circle key={`${S}${L}${j}`} cx={x} cy={yy} r={down?1:1.5} className={`rt-turret${down?' down':''}`} style={down?undefined:{fill:col}}/>);
+   }
+   STR[S].nexT.forEach(([x,yy],k)=>{
+    const down=(2-baseN)>k;
+    out.push(<circle key={`${S}nt${k}`} cx={x} cy={yy} r={down?0.9:1.4} className={`rt-turret nexT${down?' down':''}`} style={down?undefined:{fill:col}}/>);
+   });
+   out.push(<circle key={`${S}nx`} cx={STR[S].nex[0]} cy={STR[S].nex[1]} r={2.6} className={`rt-nexus${nex?' down':''}`} style={nex?undefined:{fill:col}}/>);
+   if(nex) out.push(<text key={`${S}nxx`} x={STR[S].nex[0]} y={STR[S].nex[1]+1.3} className="rt-nexus-x" textAnchor="middle">✕</text>);
+  }
+  return out;
+ },[snap.struct,colA,colB]);
  const dead=snap.dead;
  const mm=(sec:number)=>`${String(Math.floor(sec/60)).padStart(2,'0')}:${String(Math.floor(sec%60)).padStart(2,'0')}`;
 
@@ -127,6 +169,7 @@ export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEn
     <rect x={MAP.nodes.B_base[0]-6} y={MAP.nodes.B_base[1]-6} width="12" height="12" className="rt-base" style={{fill:colB}}/>
     <circle cx={MAP.nodes.baron[0]} cy={MAP.nodes.baron[1]} r="3.4" className="rt-obj"/><text x={MAP.nodes.baron[0]} y={MAP.nodes.baron[1]-4.5} className="rt-objlabel" textAnchor="middle">전령/바론</text>
     <circle cx={MAP.nodes.dragon[0]} cy={MAP.nodes.dragon[1]} r="3.4" className="rt-obj"/><text x={MAP.nodes.dragon[0]} y={MAP.nodes.dragon[1]+6.5} className="rt-objlabel" textAnchor="middle">드래곤</text>
+    <g className="rt-structs">{structLayer}</g>
     {debug&&(['A','B'] as const).flatMap(s=>[0,1,2,3,4].map(sl=>
      <polyline key={'p'+s+sl} ref={el=>{pathRefs.current[s+sl]=el;}} className={`rt-path rt-path-${s}`} points=""/>))}
     {(['A','B'] as const).flatMap(s=>[0,1,2,3,4].map(sl=>icon(s,sl)))}

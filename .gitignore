@@ -50,3 +50,6 @@ next-env.d.ts
 # 실험 산출물(재생성 가능)
 /balance-results.json
 /teamfight-results.json
+
+# 세션 임시 스크립트
+/scratch/

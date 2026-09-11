@@ -13,6 +13,20 @@
 //  - 화면 재생 시각 t = 경기 시계 / SCALE (균일 압축 — 프레임률·배속이 결과에 영향 없음, 속도 폭증 없음).
 //  - 사건은 발생 전에 접근 계획을 만들어 실제 경로로 이동해 합류. 발생 순간 순간이동 없음.
 //    이동 가능 시간과 사건 일정이 충돌하면 diag에 기록.
+//
+// 미래 사건 참조의 경계(D021 — MINIMAP 2단계 2번):
+//  - `nextOwnEvent`는 buildReplay가 완성된 경기 전체를 이미 받아 재생 경로를 구성하는 후처리 단계에서만 쓴다.
+//    이미 armed된(재생 시계가 그 사건의 접근 창에 들어온) 사건의 '확정 참가자 명단'을 읽어 이동 목적지를 정하지만,
+//    그 명단 자체는 combat.ts가 인과적으로(현재 생존·역할·능력치 기반, 미래 결과 참조 없이) 이미 결정해 둔 값이다.
+//  - **이 함수가 절대 읽지 않는 것**: 그 사건의 처치(`kills`)·승자(`fight.winner`/`objective.secured`)·이후 사건들의
+//    결과. 즉 "내가 이 다음 싸움에서 이기거나 죽는다"는 정보로 지금 어디를 갈지 정하지 않는다 — 정하는 건 오직
+//    "다음에 낄 곳이 어디인가"(팀의 다음 목표/집결 지점)뿐이다.
+//  - 이 정보는 combat.ts→game.ts로 절대 역류하지 않는다(승부·골드·POG는 이 모듈을 import하지 않음). 재생 경로가
+//    바뀌어도 결과는 바뀌지 않는다 — 반대로 결과가 이 모듈의 이동 계획에 새 확률을 추가하지도 않는다.
+//  - 관전자(뷰어)는 양 팀을 모두 보되(기본 관전 시점, MINIMAP-01 원칙), 이건 "선수가 상대 위치를 안다"는 뜻이
+//    아니다. **시야는 추상적이다**: `resolveObjective`/`resolveTeamfight`의 참가·도착 판정은 능력치 기반 확률이며
+//    실제 거리·시야·감지를 모델링하지 않는다(기존 한계, 이번에도 변경 없음 — 새 도착 판정을 더한다고 이 추상을
+//    거리 기반으로 바꾸지 않는다. 아래 "도착 추정"은 표시 필터일 뿐 참가 판정을 대신하지 않는다).
 
 import {REGION_DIST,regionTime} from './combat.ts';   // 엔진 추상 지역 이동 시간표(단일 출처) — 미니맵 이동 시간 대조용
 
@@ -175,7 +189,8 @@ export type ReplayData={
  nav:{segs:[Vec,Vec][]},          // 디버그: 보행 가능 영역(통로 선분)
  diag:string[],                   // 이동 시간 ↔ 사건 일정 충돌 등 진단
  scale:number,                    // 경기 시계 → 재생 시각 나눗수
- travel:{k:number, lateJoins:number, farJoins:number, ratioMedian:number}, // 엔진 REGION_DIST 대조 요약
+ travel:{k:number, lateJoins:number, farJoins:number, ratioMedian:number,
+  causes:Record<string,number>, causesFar:Record<string,number>}, // 엔진 REGION_DIST 대조 + "합류 이동" 원인 분류(2단계 1번)
 };
 
 // ── 사건이 벌어지는 WALK 노드명(엔진 데이터 기반). 모두 도달 가능한 통로 노드. ──────────
@@ -227,6 +242,7 @@ type Agent={
  plan:{ev:number, node:string}|null,
  pendingDest:string|null,
  lane:0|1|2, jgIdx:number, pushBias:number,
+ freeSince:number,                              // fightUntil/arriving에서 마지막으로 풀려난 시각(진단 분류용, 0=시작부터 자유)
 };
 const SPEED:Record<Slot,number>={0:0.84,1:1.06,2:0.88,3:0.82,4:0.92}; // 기본 map-unit / engine-second (TRAVEL_K로 엔진 REGION_DIST 크기에 맞춰 보정)
 const WADJ=WALK.adj;
@@ -244,6 +260,7 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
  const windows:ReplayWindow[]=[];
  const goldKeys:{t:number,a:number,b:number}[]=[{t:0,a:2500,b:2500}];
  const diag:string[]=[];
+ const causeCounts:Record<string,number>={}, causeCountsFar:Record<string,number>={}; // "합류 이동" 원인 분류 집계
  let scoreA=0,scoreB=0;
  const structState:StructSnapshot={A:[0,0,0],B:[0,0,0],baseA:2,baseB:2,nexusA:false,nexusB:false};
 
@@ -281,7 +298,7 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
   const sl=s as Slot;
   agents.push({side,slot:sl,route:[homeNode(side,sl)],seg:0,segT:0,fixedPos:null,
    act:'lane',speed:SPEED[sl]*TRAVEL_K,nextDecide:0,alive:true,respawnAt:0,plan:null,pendingDest:null,
-   lane:(sl===0?0:sl<=2?1:2) as 0|1|2, jgIdx:sl===1?(side==='A'?1:0):0, pushBias:0});
+   lane:(sl===0?0:sl<=2?1:2) as 0|1|2, jgIdx:sl===1?(side==='A'?1:0):0, pushBias:0, freeSince:0});
  }
  const ag=(r:Ref)=>agents.find(a=>a.side===r.side&&a.slot===r.slot)!;
  const posOf=(a:Agent):Vec=>{
@@ -399,10 +416,12 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
  const nextOwnEvent=(a:Agent)=>evInfo.find(x=>x.armed&&!x.done
   &&x.parts.some(p=>p.side===a.side&&p.slot===a.slot)
   &&!x.notJoined.some(n=>n.side===a.side&&n.slot===a.slot));
+ // 진단 분류(2단계 1번 항목)용: 사건 arm 시점에 이미 '이동시간 부족'으로 찍힌 (사건,선수) 쌍.
+ const shortfallFlags=new Set<string>();
 
  for(let clock=0; clock<=endClock+1; clock+=DT){
   for(const a of agents) if(!a.alive && clock>=a.respawnAt){
-   a.alive=true; a.fixedPos=null; a.route=[FOUNT[a.side]]; a.seg=0; a.segT=0; a.act='base'; a.plan=null; a.pendingDest=null;
+   a.alive=true; a.fixedPos=null; a.route=[FOUNT[a.side]]; a.seg=0; a.segT=0; a.act='base'; a.plan=null; a.pendingDest=null; a.freeSince=clock;
    delete fightUntil[a.side+a.slot]; delete arriving[a.side+a.slot];
    emit(a,clock,'idle','부활');
    beats.push({t:T(clock),seq:-1,engineClock:clock,kind:'revive',ref:{side:a.side,slot:a.slot},text:'부활'});
@@ -413,6 +432,9 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
    ev.done=true;
    const cb=ev.cb, evPos=WN[ev.node], EC=ev.eclock;
    const evT=Math.max(ev.stime,clock);   // 화면 시각: stime과 현재 tick 중 늦은 쪽(같은 tick 내 사망이 먼저 찍히는 것 방지)
+   // 화면상 도착 추정 시각(2단계 4번 — 합류 전 처치의 어시스트 표시 방지용). 이미 도착=evT, 아직이면 evT+거리/속도(직선 근사,
+   // 표시 필터 목적일 뿐 실제 이동 경로·판정에는 쓰지 않는다 — 처치·기여·POG·골드는 그대로 엔진 값).
+   const arrivalEst:Record<string,number>={};
    for(const r of ev.parts){
     const a=ag(r); if(ev.notJoined.some(n=>n.side===r.side&&n.slot===r.slot)) continue;
     if(!a.alive){ // 엔진은 참가자로 셌지만 미니맵 타임라인에선 사망 상태 — 숨기지 않고 기록
@@ -421,14 +443,24 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
     if(d<=6){                                   // 이미 도착 — 그 자리에서 교전(순간이동 없음)
      a.fixedPos=evPos.slice() as Vec; a.act='fight'; a.plan=null;
      fightUntil[r.side+r.slot]=ev.stime+ev.tail;
+     arrivalEst[r.side+r.slot]=evT;
      emit(a,evT,'fight',`#${ev.idx} 교전`);
     }else{
+     arrivalEst[r.side+r.slot]=evT+d/a.speed;
      // 아직 못 왔다 — 현재 위치에서 실제 경로로 계속 이동해 합류한다(순간이동 금지).
      // 엔진은 이미 교전 중이므로 화면은 '엔진 교전 반영 중'으로 명시(모순을 숨기지 않는다).
      headTo(a,ev.node); a.act='group'; a.plan=null;
      arriving[r.side+r.slot]={node:ev.node,until:ev.stime+ev.tail+(d>34?18:0),seq:ev.idx};
      emit(a,evT,'move',`#${ev.idx} 합류 중(엔진 교전 반영)`);
-     diag.push(`#${ev.idx}: ${r.side}${r.slot} ${d>34?'원거리 ':''}합류 이동(거리 ${d.toFixed(0)}, T=${Math.round(EC)}s${ev.showDelay?` +지연 ${ev.showDelay}s`:''})`);
+     // 원인 분류(2단계 1번): 정상 장거리 / showDelay로 이미 흡수된 정상 전환 / 사전에 이미 찍힌 이동시간 부족 /
+     // 직전 사건(fightUntil·arriving)과 겹쳐 이 사건 arm 시점에 아직 못 풀려난 경우(이전 행동 충돌).
+     const armTime=ev.stime-ev.lead;
+     const cause=shortfallFlags.has(`${ev.idx}|${r.side}${r.slot}`) ? '이동시간부족'
+      : a.freeSince>armTime ? '이전사건충돌'
+      : ev.showDelay>0 ? '지연전환'
+      : '장거리';
+     causeCounts[cause]=(causeCounts[cause]??0)+1; if(d>34)causeCountsFar[cause]=(causeCountsFar[cause]??0)+1;
+     diag.push(`#${ev.idx}: ${r.side}${r.slot} ${d>34?'원거리 ':''}합류 이동(거리 ${d.toFixed(0)}, T=${Math.round(EC)}s${ev.showDelay?` +지연 ${ev.showDelay}s`:''}) [${cause}]`);
     }
    }
    beats.push({t:T(evT),seq:ev.idx,engineClock:EC,kind:'engage',side:cb?cb.side:'A',text:`${ev.e.title} — 교전`});
@@ -441,9 +473,12 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
    (ev.kills as any[]).forEach((k,ki)=>{
     const kt=evT+ki*3;
     scoreA+=k.killer.side==='A'?1:0; scoreB+=k.killer.side==='B'?1:0;
+    // 화면 어시스트 표시는 도착 추정 시각이 이 처치 시각 이전인 선수만(2단계 4번 — 합류 전 처치엔 어시스트 미표시).
+    // 엔진의 실제 어시스트 골드·기여(POG)는 그대로 — 이건 표시(kill feed) 필터일 뿐.
+    const visibleAssists=(k.assists??[]).filter((x:any)=>(arrivalEst[x.side+x.slot]??evT)<=kt);
     beats.push({t:T(kt),seq:ev.idx,engineClock:EC,kind:'kill',
      ref:{side:k.victim.side,slot:k.victim.slot},by:{side:k.killer.side,slot:k.killer.slot},
-     assists:(k.assists??[]).map((x:any)=>({side:x.side,slot:x.slot})),
+     assists:visibleAssists.map((x:any)=>({side:x.side,slot:x.slot})),
      side:k.killer.side,scoreDelta:[k.killer.side==='A'?1:0,k.killer.side==='B'?1:0],
      fb:!!cb.firstBlood&&ki===0,text:cb.firstBlood&&ki===0?'FIRST BLOOD':'처치'});
     const v=ag({side:k.victim.side,slot:k.victim.slot});
@@ -499,7 +534,7 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
     if(!cur || cur.done || cur.stime>ev.stime) a.plan={ev:ev.idx,node:ev.node};
     decide(a,clock);
     const eta=clock+pathLen(a.route.slice(a.seg).map(n=>WN[n]))/a.speed;
-    if(eta>ev.stime+8) diag.push(`#${ev.idx} @${Math.round(ev.eclock)}s: ${a.side}${a.slot} 이동시간 부족(도착 ~${Math.round(eta)}s, lead ${Math.round(lead)})`);
+    if(eta>ev.stime+8){ diag.push(`#${ev.idx} @${Math.round(ev.eclock)}s: ${a.side}${a.slot} 이동시간 부족(도착 ~${Math.round(eta)}s, lead ${Math.round(lead)})`); shortfallFlags.add(`${ev.idx}|${a.side}${a.slot}`); }
    }
    // 교전 정지 창(tail)이 다음 사건까지 걸어갈 시간을 남긴다(연속 한타→공성에서 참가자가 실제로 이동).
    ev.tail=Math.max(5,Math.min(8+ev.kills.length*5,(evInfo[ei+1]?.stime??Infinity)-ev.stime-14));
@@ -514,7 +549,7 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
    const fu=fightUntil[kk];
    if(fu!==undefined){
     if(clock<fu){ a.act='fight'; continue; }
-    delete fightUntil[kk];
+    delete fightUntil[kk]; a.freeSince=clock;
     const p=posOf(a); a.fixedPos=null;
     const hn=nearestWalkNode(p);
     const nxt=nextOwnEvent(a);
@@ -535,7 +570,7 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
    if(arr){
     // 합류 이동 중 — 경로 그대로 진행하다 도착(≤5u)하거나 창이 닫히면 처리.
     if(clock>=arr.until){
-     delete arriving[kk];
+     delete arriving[kk]; a.freeSince=clock;
      const nxt=nextOwnEvent(a);
      if(nxt){ a.plan={ev:nxt.idx,node:nxt.node}; a.act='group'; headTo(a,nxt.node); a.nextDecide=clock+4; emit(a,clock,'move',`#${nxt.idx} 재합류`); }
      else { a.act='retreat'; emit(a,clock,'move','합류 무산 — 복귀'); decide(a,clock+0.01); }
@@ -583,8 +618,9 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
  const travel={k:TRAVEL_K,
   lateJoins:diag.filter(d=>d.includes('합류 이동')).length,
   farJoins:diag.filter(d=>d.includes('원거리 합류')).length,
-  ratioMedian:rr.length?rr[rr.length>>1]:0};
- diag.unshift(`이동 대조: TRAVEL_K=${TRAVEL_K} · WALK/REGION_DIST 비율 중앙값 ${travel.ratioMedian} · 지연 합류 ${travel.lateJoins}(원거리 ${travel.farJoins})`);
+  ratioMedian:rr.length?rr[rr.length>>1]:0,
+  causes:{...causeCounts}, causesFar:{...causeCountsFar}}; // "합류 이동" 원인 분류(2단계 1번): 장거리/지연전환/이동시간부족/이전사건충돌
+ diag.unshift(`이동 대조: TRAVEL_K=${TRAVEL_K} · WALK/REGION_DIST 비율 중앙값 ${travel.ratioMedian} · 지연 합류 ${travel.lateJoins}(원거리 ${travel.farJoins}) · 원인 ${JSON.stringify(travel.causes)}`);
  return {duration,windows,tracks,beats,goldKeys,finalScore:[scoreA,scoreB],
   nav:{segs:WALK_SEGS.map(([a,b])=>[a.slice() as Vec,b.slice() as Vec])},diag,scale:SCALE,travel};
 }

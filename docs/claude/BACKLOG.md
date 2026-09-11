@@ -9,8 +9,8 @@
 | ABIL-01 | P1 | IN_PROGRESS | 선수 능력치의 경기 영향 개선. 1단계(라인·시야→개인 자원→후속 전투 전력) 완료 (2026-09-10, D007). 다음: Phase 3~5 |
 | COMP-01 | P1 | IN_PROGRESS | 조합 승률·메타·AI 밴픽 확장(PROTOCOL-Composition-Meta-Design.md). 단계 2 첫 슬라이스(조합 프로필→구간 효과, 단일 경로) 완료 (2026-09-10, D008). 다음: 단계 3~6 |
 | CAST-01 | P1 | IN_PROGRESS | 구조화된 중계. 1차(사건 기억·준비 beats·강도 tier·감독 레버·밀도 토글) 완료 (2026-09-10, D009). 다음: 참여자 상세·다중 조합 콜백·리캡 확대 |
-| MINIMAP-01/02 | P1 | IN_PROGRESS | 이동형 미니맵. 1단계(D013)·지속형 에이전트(D016)·엔진 REGION_DIST 이동 정합+구조물 SVG(D018) 완료. 다음: 접근 도착↔합류 판정 통합(별도 체크포인트), 모바일/탭전환 브라우저 확인, 애니 다듬기. 아래 "MINIMAP-01" 절 참조 |
-| MATCH-SYS | P1 | IN_PROGRESS | ABIL-01·COMP-01·CAST-01을 하나의 경기 시스템으로 통합. 단위 1(D010)·2(D011)·3(D012)·4(D014)·5(D015)·5 점검(D017)·6 첫 슬라이스(D019: POG를 실제 사건 기여로, `pogReason`) 완료. 다음: 단위 6 step 5(리캡을 근거 사건화). 아래 "MATCH-SYS" 절 참조 |
+| MINIMAP-01/02 | **P0(사용자 재우선순위)** | IN_PROGRESS | 이동형 미니맵. 1단계(D013)·지속형 에이전트(D016)·엔진 REGION_DIST 이동 정합+구조물 SVG(D018)·사건-경계 이동 연속성(D020: `nextOwnEvent`, 합류 이동 원거리 −84%) 완료, PC 브라우저 재검증함. 다음: **접근 도착↔합류 판정 통합**(별도 체크포인트), 모바일/탭전환 실기기 확인. 아래 "MINIMAP-01" 절 참조 |
+| MATCH-SYS | P1 | IN_PROGRESS | ABIL-01·COMP-01·CAST-01을 하나의 경기 시스템으로 통합. 단위 1(D010)·2(D011)·3(D012)·4(D014)·5(D015)·5 점검(D017)·6 첫 슬라이스(D019: POG를 실제 사건 기여로, `pogReason`)·6 첫 슬라이스 점검·수정(D020: 이중가산·고정슬롯 동점) 완료. 다음: 단위 6 step 5(리캡을 근거 사건화) — **MINIMAP 완성 다음 우선순위로 미룸(사용자 지시)**. 아래 "MATCH-SYS" 절 참조 |
 | SAVE-01 | P1 | TODO | v1/v2와 서로 다른 v3 형태의 마이그레이션 검증 |
 | DRAFT-01 | P2 | TODO | 선택/스왑 후 선수별 정확한 보정 표시 |
 | DOC-01 | P2 | TODO | 기존 GDD·README를 현행140종/Lv4/스왑 기준으로 통합 |
@@ -91,12 +91,13 @@
 - 검증: N=6000 — NEXUS 97.62% / CAP 2.38%. 7개 스위트·tsc·build PASS. 커밋 `7167829`.
 
 ### 단위 6 — 표시 데이터 통합 (ABIL-01 Phase 4 + 중계 후속)
-1. ✅ (D019) `SetResult`에 개인 기여 집계 = 각 사건의 `combat.kills`(처치·어시·FB) + `combat.fight.contrib`(kill/engage/protect/damage/survived) + `combat.siege`의 공성 참여·넥서스 + 오브 확보 참여를 슬롯별로 합산. **재추첨·재계산 없음** — 승부·골드·중계 난수 미소비, `p`·`lead`·`advantage` 불변.
-2. ✅ (D019) POG = 그 집계의 최댓값 슬롯(승리 팀). tiebreak: 전투 기여(`kaW+tfW`) → 보호(`protW`) → 슬롯 순. `SetResult.pogReason` = 실제 사건 원자료로 만든 이유 문자열("<ROLE> · N킬 관여 · 한타 딜러 보호 M회 · …"), 기여 큰 순 최대 3개. `recap[]`에 근거 문장 추가. `app/manager.tsx` PoG 줄에 노출.
-3. ✅ (D019) `damage`는 "가상 점수" — 이유 문자열에 미언급(total엔 ×0.16 소량 반영). 킬 관여 수 = `kills + assists + round(Σ contrib.kill)`.
+**우선순위 재조정(사용자 지시, 2026-09-11)**: MINIMAP-01/02 완성이 먼저다. step 5(리캡)는 그 다음.
+1. ✅ (D019) `SetResult`에 개인 기여 집계 = 각 사건의 `combat.kills`(처치·어시·FB) + `combat.fight.contrib`(damage/survived/protect) + `combat.siege`의 공성 참여·넥서스 + 오브 확보 참여를 슬롯별로 합산. **재추첨·재계산 없음** — 승부·골드·중계 난수 미소비, `p`·`lead`·`advantage` 불변.
+2. ✅ (D019, D020에서 이중가산 수정) POG = 그 집계의 최댓값 슬롯(승리 팀). tiebreak: 전투 기여(`kaW+tfW`) → 보호(`protW`) → **선수 id 해시**(D020 — 완전 동률에서 고정 슬롯 편향 방지). `SetResult.pogReason` = 실제 사건 원자료로 만든 이유 문자열("<ROLE> · N킬 관여 · 한타 딜러 보호 M회 · …"), 기여 큰 순 최대 3개. `recap[]`에 근거 문장 추가. `app/manager.tsx` PoG 줄에 노출.
+3. ✅ (D019) `damage`는 "가상 점수" — 이유 문자열에 미언급(total엔 ×0.16 소량 반영). **킬 관여 수 = `kills + assists`만**(D020 — 한타 처치가 `cb.kills`와 `contrib.kill`로 이중 가산되던 결함 수정. 한타 처치의 POG 선정 가중은 `TF_KB` 상수로 total에만 별도 가산, 표시 수치엔 미반영).
 4. ✅ (D019, 확인만) 골드 그래프 = `GoldGraph`가 이미 사건별 `e.goldA/goldB`(엔진 골드)를 reveal-gate로 그림. 별도 골드 생성 없음, 스포일러 방지 유지. **코드 변경 불필요**.
-5. ⬜ **← 다음** 리캡: `recap[]`를 실제 기여 선수·근거 사건·흐름 바꾼 장면(반전 beat·첫 구조물·넥서스)으로. "이 선수 덕분에 +8%" 같은 미계산 설명 금지. 훈련 이력 콜백. `narration.ts` `NarrMemory`(반전 beat·FB 시각)와 `firstStructSide`·capDiag를 근거로.
-6. ✅ (D019, POG 부분) 검증: `combat.test` 섹션 11 — 결정성(11a), POG는 승리 팀 선수(11b), POG 이유가 실제 사건과 일치 + 전투 기여 ≥ 승리 팀 중앙값(11c, 250시드), 역할 편향 없음(11d, 600시드 + `teamfight-review`). ⬜ 골드 그래프 = 중계 골드 회귀 테스트는 step 5와 함께.
+5. ⬜ 리캡(MINIMAP 완성 다음): `recap[]`를 실제 기여 선수·근거 사건·흐름 바꾼 장면(반전 beat·첫 구조물·넥서스)으로. "이 선수 덕분에 +8%" 같은 미계산 설명 금지. 훈련 이력 콜백. `narration.ts` `NarrMemory`(반전 beat·FB 시각)와 `firstStructSide`·capDiag를 근거로.
+6. ✅ (D019/D020, POG 부분) 검증: `combat.test` 섹션 11 — 결정성(11a), POG는 승리 팀 선수(11b), POG 이유가 실제 사건과 일치(11c, 250시드 — D020에서 "N킬 관여"=`kills+assists`로 재정의), 역할 편향 확인 범위·한계 기록(11d, 600시드 + `teamfight-review`, MID~9%·ADC~34% — 밑바탕 전투 모델 결과로 판단, 공식 재보정 안 함). ⬜ 골드 그래프 = 중계 골드 회귀 테스트는 step 5와 함께.
 
 ### 단위 6 참고 — 원래 목록 (ABIL-01 Phase 4 + 중계 후속)
 - 골드 그래프: 저장된 개인 자원 변화/스냅샷 사용. 중계와 다른 골드 별도 생성 금지. 미공개 미래 사건 노출 금지.
@@ -138,12 +139,18 @@
 - `replay.test`: 섹션 3 step 상한 8→16(요구 변경 주석). 섹션 10 신규(REGION_DIST 대조).
 - 검증: 7개 스위트·tsc·build PASS. **브라우저 육안 확인함**(RECAP 재생·구조물 24개·넥서스 파괴 표시·디버그 이동 대조 패널·배속/시크·크래시 없음). 커밋 `9e2ac06`.
 
+### 사건-경계 이동 연속성(재계획 가드 결함 수정) · 완료 (2026-09-11, D020)
+- **발견**: 사건 해소 블록의 "다음 armed 사건으로 재계획" 로직(D018)이 `fightUntil`/`arriving` 가드 때문에 방금 교전에 들어간 참가자에겐 항상 스킵되는 **죽은 코드**였다 — 실제 재계획 지점(`fightUntil` 만료·`arriving` 타임아웃)은 무조건 `homeNode`로 후퇴시켰고, 한타 직후 거의 항상 붙는 공성을 놓쳐 뒤늦게 걸어 합류("합류 이동" D018이 남긴 잔여치의 원인).
+- **수정**: `nextOwnEvent(a)` 신설 — 이미 armed된 다음 사건 중 이 선수가 낀 것을 찾아, 있으면 그쪽으로 바로 이어 이동(실제 경로, 홈 왕복 없음), 없을 때만 기존처럼 후퇴. 합류 판정(`combat.participants`)·처치·보상 불변 — 이동 계획만.
+- 검증: 같은 시드 12개(수정 전/후) 합류 이동 579→346(−40%), 원거리(>34u) 349→**55(−84%)**. 이동시간 부족/합류 실패 0 유지(60시드 확장 1건, 회귀 아님). 7개 스위트·tsc·build PASS(engine 1060 결정적 세트 유지).
+- **브라우저 육안 확인함**(`localhost:5173`, PC): 고정 시드로 드래곤 한타→바텀 공성→미드 한타로 이어지는 연속 구간 재생. 홈 왕복 없이 경로 유지, 다른 라인 독립 행동, 벽 통과 없음, 사망/부활 동기, 콘솔 에러 없음. GIF 녹화·내보내기 성공했으나 파일시스템 접근 불가(D018과 동일 제약).
+
 ### 남은 작업
-- **접근 도착 시각 ↔ 합류 판정 통합**(별도 체크포인트): 현재 엔진 `combat.participants`가 authoritative(결과 불변). showDelay는 화면 렌더만 조정. 실제 이동 도착 시각을 합류 판정에 연결 — 기존 능력치 판단과 독립 확률 이중 적용 없이. 결과가 바뀌는 부분 명시 기록 + combat.test/teamfight-review 재측정.
+- **접근 도착 시각 ↔ 합류 판정 통합**(별도 체크포인트) ← **다음 첫 행동**: 현재 엔진 `combat.participants`가 authoritative(결과 불변). showDelay·`nextOwnEvent`는 화면 렌더·이동 계획만 조정(D018/D020). 실제 이동 도착 시각을 합류 판정에 연결 — 기존 능력치 판단과 독립 확률 이중 적용 없이. 결과가 바뀌는 부분 명시 기록 + combat.test/teamfight-review 재측정. **완료 조건**: (a) 도착 시각이 `resolveObjective`의 `arriveP`·`resolveTeamfight`의 `numAdvFav`와 정확히 어떻게 결합되는지 설계 문서화(이중 확률 적용 금지), (b) 결과 분포 변화를 통제 실험으로 재측정해 방향/크기 기록, (c) 시각화 변경(이동 계획)과 합류 판정 변경(결과 영향)을 별도 커밋으로 분리, (d) combat.test/replay.test/teamfight-review 갱신, (e) PC+모바일 브라우저로 새 합류 판정이 만든 화면 변화 확인.
 - 한타/오브/공성 사건의 진입·보호·후퇴·철수 애니메이션 타이밍을 갱킹 수준으로 다듬기, `notJoined`(리스폰 대기) 별도 연출.
-- 모바일 지도 비율·아이콘 클릭→선수 상세·탭 비활성 자동 일시정지 육안 확인(이번 세션 CDP 뷰포트 고정으로 미확인).
-- 비교 영상(변경 전 = git tag `minimap-pre-persistent` 체크아웃 필요).
-- `top↔river` WALK 직결 통로 추가 검토(현재 우회로 비율 2.2).
+- **모바일 지도 비율·아이콘 클릭→선수 상세·탭 비활성 자동 일시정지 실기기 확인**: 이번 세션도 `resize_window`+새로고침 후 CDP 스크린샷이 1568px 고정이라 브라우저 자동화로는 확인 불가(D018·D020 동일). 실제 모바일 기기 또는 브라우저 개발자 도구를 직접 조작할 수 있는 사람이 확인 필요 — 될 때까지 "완료"로 표시하지 않는다.
+- 비교 영상(변경 전 = git tag `minimap-pre-persistent` 체크아웃 필요). D020에서도 GIF 녹화까지는 했으나 파일시스템 접근 불가로 미첨부.
+- `top↔river` WALK 직결 통로 추가 검토(현재 우회로 비율 2.2, D018 이후 미변경).
 
 ## COMP-01 — 조합 승률·메타·AI 밴픽 확장
 근거: `docs/claude/PROTOCOL-Composition-Meta-Design.md`(6단계). `PROTOCOL-Ability-Review.md`(ABIL-01)와 함께 진행. 회귀: `tests/composition.test.mjs`, 민감도는 `tests/balance-review.mjs`(조합 무관 = 불변이어야) + 임시 comp 측정 스크립트.

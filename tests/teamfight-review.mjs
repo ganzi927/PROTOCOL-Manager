@@ -93,6 +93,7 @@ function run(change){
   const r=simulateSet(g,m);
   winBySeed[seed]=r.winner==='nva'?1:0;
   const mt=setMetrics(r);
+  { const wl=r.winner==='nva'?r.lineupA:r.lineupB; const ps=wl.indexOf(r.pog); if(ps>=0)acc['pog'+ps]=(acc['pog'+ps]||0)+1; } // 단위 6: 승리 팀 POG 슬롯 분포
   for(const k in mt){ if(typeof mt[k]==='number'){ acc[k]=(acc[k]||0)+mt[k]; }
    else if(k==='firstStruct'){ acc.fsA=(acc.fsA||0)+(mt[k]==='A'?1:0); acc.fsB=(acc.fsB||0)+(mt[k]==='B'?1:0); } }
   if(mt.firstStruct==='A')acc.fsAwin=(acc.fsAwin||0)+mt.win;
@@ -125,6 +126,8 @@ function run(change){
   siegeADCaliveN:acc.siegeADCaliveN, siegeADCdeadN:acc.siegeADCdeadN,
   firstStructAwinPct:acc.fsA?acc.fsAwin/acc.fsA*100:0, firstStructA:acc.fsA,
   objSecuredApct:acc.objN?acc.objSecuredA/acc.objN*100:0,
+  pogDist:[0,1,2,3,4].map(s=>(acc['pog'+s]||0)/N*100),   // 단위 6: 승리 팀 POG 슬롯 분포 %
+
   structAfterObjPct:acc._structAfterObjBase?acc.structAfterObj/acc._structAfterObjBase*100:0,
   resSlot:[0,1,2,3,4].map(s=>acc.resSlot?undefined:undefined),  // (자원 슬롯은 아래에서 별도 집계)
   _raw:acc,
@@ -163,6 +166,7 @@ console.log(`균형: 한타/세트 ${f2(eq.tfN/N)}  참가율 ${f2(eq.partPct)}%
 console.log(`균형: 딜러 생존 ${f2(eq.dealerSurvPct)}%  보호 성공 ${f2(eq.protOkPct)}%(시도 ${eq.protAtt})  오브 A확보 ${f2(eq.objSecuredApct)}%  오브 확보→구조물 진행 ${f2(eq.structAfterObjPct)}%`);
 console.log(`균형: 공성/세트 ${f2(eq.siegeN/N)}  A철거/세트 ${f2(eq.siegeDownA_perSet)}  B철거/세트 ${f2(eq.siegeDownB_perSet)}  | 첫 구조물 A선취 시 A승률 ${f2(eq.firstStructAwinPct)}% (n=${eq.firstStructA})`);
 console.log(`균형: 공성 시 A-ADC 생존이면 철거 ${f2(eq.siegeADCaliveDown)}(n=${eq.siegeADCaliveN}) vs 사망이면 ${f2(eq.siegeADCdeadDown)}(n=${eq.siegeADCdeadN})`);
+console.log(`균형: 승리 팀 POG 슬롯 분포(TOP JGL MID ADC SUP) — ${eq.pogDist.map(x=>f2(x)+'%').join(' ')} (역할 고정 가중치 아님, 실제 사건 기여 집계)`);
 
 console.log(`\n조건별 세트 승률 (강화−균형) %p [95% CI], 페어 원자료(b=균형승·강화패 / c=균형패·강화승), 행동 지표 Δ:`);
 for(const r of rows){

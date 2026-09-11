@@ -35,7 +35,7 @@ export type DraftPick={champ:string,role:Role};
 export type DraftState={blue:string,red:string,step:number,bans:{side:'B'|'R',champ:string}[],picksBlue:DraftPick[],picksRed:DraftPick[],actions:{team:string,kind:string,champ:string}[],complete:boolean};
 export type GameEvent={index:number,phase:string,title:string,winner:string,edge?:string,prob:number,advantage:number,powerA:number,powerB:number,goldA:number,goldB:number,detail:string,leadA?:number,resPowA?:number,compA?:number,beats?:Beat[],tier?:Tier,kills?:{a:number,b:number},combat?:CombatEvent};
 export type CapDiag={reason:'TIME'|'EVENT',clock:number,events:number,structDealt:[number,number],baseTurrets:[number,number],inhibsOpen:[number,number],recentSiegeFails:string[],tiebreakStage:'struct'|'pressure'|'advantage'|'coin'};
-export type SetResult={winner:string,endReason?:'NEXUS'|'CAP_TIME'|'CAP_EVENT',capDiag?:CapDiag,events:GameEvent[],draft:Draft,recap:string[],pog:string,powersA:number[],powersB:number[],lineupA:string[],lineupB:string[],leadA?:number[],draftFx?:{lane:number,obj:number,fight:number}};
+export type SetResult={winner:string,endReason?:'NEXUS'|'CAP_TIME'|'CAP_EVENT',capDiag?:CapDiag,events:GameEvent[],draft:Draft,recap:string[],pog:string,pogReason?:string,powersA:number[],powersB:number[],lineupA:string[],lineupB:string[],leadA?:number[],draftFx?:{lane:number,obj:number,fight:number}};
 export type Match={id:string,a:string,b:string,bestOf:number,scoreA:number,scoreB:number,sets:SetResult[],winner?:string,draft?:Draft,draftState?:DraftState,label:string};
 export type RecordMatch={id:string,a:string,b:string,sa:number,sb:number,winner:string,label:string,season:number};
 export type Game={version:number,seed:number,season:number,split:'SPRING'|'SUMMER',round:number,stage:'REGULAR'|'PLAYOFF'|'INTERNATIONAL',phase:'PLAN'|'PREP'|'DRAFT'|'RECAP'|'MATCH_END'|'SPLIT_END'|'OFFSEASON'|'WORLD_END',teamId:string,players:Player[],teams:Team[],fixtures:string[][][],match:Match|null,history:RecordMatch[],news:string[],hall:{season:number,split:string,champion:string,rank:number}[],po:Match[],poSeeds:string[],champion:string|null,trained:boolean,offWeek:number,ledger:{label:string,amount:number}[],planNotice:string[],meta:string[],international?:International,settledWeeks?:number,sandbox?:boolean};
@@ -348,13 +348,62 @@ export function simulateSet(g:Game,m:Match):SetResult{
    beats:[],tier:'close',kills:{a:0,b:0},leadA:Math.round(lead.reduce((a,b)=>a+b,0)),resPowA:0,compA:0});
  }
  const own=m.a===g.teamId?pa:pb,other=m.a===g.teamId?pb:pa;const diffs=[avg(own.slice(0,3))-avg(other.slice(0,3)),own[3]-other[3],own[4]-other[4]];const weak=diffs.indexOf(Math.min(...diffs)),strong=diffs.indexOf(Math.max(...diffs));
- const ws=starters(g,winner),contrib=ws.map(()=>0);for(const e of events.filter(e=>e.combat&&e.winner===winner&&!(e.combat?.objective&&!e.combat.objective.secured)&&!(e.combat?.fight&&!e.combat.fight.winner))){if(e.index===0)contrib[0]+=2;else if(e.index===1)contrib[2]+=2;else if(e.index===2){contrib[3]+=1.3;contrib[4]+=.7;}else if(e.combat?.kind==='siege')[0,1,2,3,4].forEach(k=>contrib[k]+=[.15,.1,.15,.4,.2][k]*2.5);else [0,1,2,3,4].forEach(k=>contrib[k]+=(e.index<5?[.1,.35,.2,.1,.25]:[.15,.15,.2,.3,.2])[k]*(e.index<5?2:3));}
- const pog=ws[contrib.indexOf(Math.max(...contrib))].id;
+ const ws=starters(g,winner);
+ // ── POG: 실제 개인 기여 집계(단위 6) ──────────────────────────────────────────────
+ // 사건 데이터(combat)에 이미 있는 처치·어시스트·한타 기여·보호·공성 참여·오브 확보만 슬롯별로 합산한다.
+ // 재추첨·재계산 없음(승부·골드·중계 난수 미소비, p·lead·advantage 불변). POG = 승리 팀 최댓값 슬롯.
+ type SC={total:number,kaW:number,tfW:number,protW:number,kills:number,assists:number,tfInv:number,protects:number,objSec:number,siegeS:number,nexus:boolean,laneW:number};
+ const mkC=():SC=>({total:0,kaW:0,tfW:0,protW:0,kills:0,assists:0,tfInv:0,protects:0,objSec:0,siegeS:0,nexus:false,laneW:0});
+ const cSide:Record<Side,SC[]>={A:[0,1,2,3,4].map(mkC),B:[0,1,2,3,4].map(mkC)};
+ const gc=(side:Side,slot:number)=>slot>=0&&slot<5?cSide[side][slot]:null;
+ const CB={KILL:3.0,ASSIST:1.4,FB:1.5,LANE:1.0,OBJ:0.7,OBJ_JGL:1.5,TF_KILL:2.2,TF_ENGAGE:1.2,TF_DMG:0.16,TF_SURV:0.25,SIEGE:1.0,SIEGE_ADC:1.8,NEXUS:4.0};
+ for(const e of events){
+  const cb=e.combat;if(!cb)continue;
+  for(const k of cb.kills){                       // 처치·어시스트 — 모든 사건 공통
+   const kc=gc(k.killer.side,k.killer.slot);if(kc){kc.total+=CB.KILL;kc.kaW+=CB.KILL;kc.kills++;}
+   for(const as of k.assists){const ac=gc(as.side,as.slot);if(ac){ac.total+=CB.ASSIST;ac.kaW+=CB.ASSIST;ac.assists++;}}
+  }
+  if(cb.firstBlood&&cb.kills[0]){const fc=gc(cb.kills[0].killer.side,cb.kills[0].killer.slot);if(fc){fc.total+=CB.FB;fc.kaW+=CB.FB;}}
+  if((cb.kind==='gank'||cb.kind==='skirmish')&&cb.noKill){
+   for(const pt of cb.participants)if(pt.side===cb.side){const c=gc(pt.side,pt.slot);if(c){c.total+=CB.LANE;c.laneW+=CB.LANE;}} // 처치 없이 라인 주도권
+  }else if(cb.kind==='objective'&&cb.objective!.secured){
+   const sec=cb.objective!.secured;
+   for(const pt of cb.participants)if(pt.side===sec){const c=gc(pt.side,pt.slot);if(c){c.total+=pt.slot===1?CB.OBJ_JGL:CB.OBJ;c.objSec++;}}
+  }else if(cb.kind==='teamfight'){
+   for(const cc of cb.fight!.contrib){             // 한타 기여는 이미 사건에 슬롯별로 계산돼 있다
+    const c=gc(cc.ref.side,cc.ref.slot);if(!c)continue;
+    const tw=cc.kill*CB.TF_KILL+cc.engage*CB.TF_ENGAGE+cc.damage*CB.TF_DMG+(cc.survived?CB.TF_SURV:0);
+    c.total+=tw;c.tfW+=tw;c.tfInv+=cc.kill;
+    if(cc.protect>0){c.total+=cc.protect*(CB.TF_KILL*1.1);c.protW+=cc.protect*(CB.TF_KILL*1.1);c.protects+=cc.protect;} // 딜러 보호 성공
+   }
+  }else if(cb.kind==='siege'){
+   const sg=cb.siege!;
+   if(sg.structuresDown>0)for(const pt of cb.participants)if(pt.side===sg.side){const c=gc(pt.side,pt.slot);if(c){c.total+=(pt.slot===3?CB.SIEGE_ADC:CB.SIEGE)*sg.structuresDown;c.siegeS+=sg.structuresDown;}}
+   if(sg.nexus)for(const pt of cb.participants)if(pt.side===sg.side){const c=gc(pt.side,pt.slot);if(c){c.total+=CB.NEXUS;c.nexus=true;}}
+  }
+ }
+ const wSC=cSide[winner===m.a?'A':'B'];
+ let pogSlot=0;
+ for(let s=1;s<5;s++){
+  const a=wSC[s],b=wSC[pogSlot];
+  if(a.total>b.total+1e-9||(Math.abs(a.total-b.total)<=1e-9&&(a.kaW+a.tfW>b.kaW+b.tfW||(a.kaW+a.tfW===b.kaW+b.tfW&&a.protW>b.protW))))pogSlot=s;
+ }
+ const pog=ws[pogSlot].id;
+ // 선정 이유 = 실제 사건 원자료(가중치 역산 아님). '피해량'은 가상 점수라 언급하지 않는다(체력·피해 시스템 없음).
+ const pc=wSC[pogSlot],whyPog:string[]=[];
+ const kaTot=pc.kills+pc.assists+Math.round(pc.tfInv);
+ if(kaTot>0)whyPog.push(`${kaTot}킬 관여`);
+ if(pc.protects>0)whyPog.push(`한타 딜러 보호 ${Math.round(pc.protects)}회`);
+ if(pc.objSec>0)whyPog.push(`오브젝트 ${pc.objSec}회 확보`);
+ if(pc.siegeS>0)whyPog.push(`구조물 공성 ${pc.siegeS}회`);
+ if(pc.nexus)whyPog.push('넥서스 파괴 가담');
+ if(!whyPog.length)whyPog.push('라인·운영 주도권');
+ const pogReason=`${ROLES[pogSlot]} · ${whyPog.slice(0,3).join(' · ')}`; // 기여가 큰 순서(처치>보호>오브>공성>넥서스)로 최대 3개
  const lastTf=events.filter(e=>e.combat?.kind==='teamfight').at(-1)??events.at(-1)!;
  const endLine=endReason==='NEXUS'
   ?`${meta(winner).short}가 넥서스를 파괴하며 세트를 마무리했습니다.`
   :`${endReason==='CAP_TIME'?'시간 상한':'사건 상한'}으로 세트가 종료됐습니다 — ${meta(winner).short}가 구조물·교전 우위로 판정승(넥서스 미파괴).`;
- return {winner,endReason,capDiag,events,draft,pog,powersA:pa,powersB:pb,leadA:lead.map(x=>Math.round(x)),draftFx:{lane:Math.round(de.lane*100)/100,obj:Math.round(de.obj*100)/100,fight:Math.round(de.fight*100)/100},lineupA:starters(g,m.a).map(p=>p.id),lineupB:starters(g,m.b).map(p=>p.id),recap:[`${['라인전','오브젝트','한타'][strong]} 파워 격차 ${diffs[strong]>=0?'+':''}${diffs[strong].toFixed(1)}. ${diffs[strong]>=0?'우리 팀이 우위를 만들었습니다.':'상대가 전반적인 전력에서 앞섰습니다.'}`,`${['라인전','오브젝트','한타'][weak]}에서 ${Math.abs(diffs[weak]).toFixed(1)}의 전력 ${diffs[weak]<0?'열세':'우위'}. ${weak===2?'피로와 조합, 팀 호흡을 함께 확인하세요.':weak===1?'정글·서포터 훈련과 운영 전술을 검토하세요.':'라인 주도권과 우선 라인을 조정해 보세요.'}`,`${endLine} 마지막 교전 우리 팀 승리 확률은 ${(m.a===g.teamId?lastTf.prob:100-lastTf.prob).toFixed(1)}%였습니다. 확률이 승리를 보장하지는 않습니다.`]};
+ return {winner,endReason,capDiag,events,draft,pog,pogReason,powersA:pa,powersB:pb,leadA:lead.map(x=>Math.round(x)),draftFx:{lane:Math.round(de.lane*100)/100,obj:Math.round(de.obj*100)/100,fight:Math.round(de.fight*100)/100},lineupA:starters(g,m.a).map(p=>p.id),lineupB:starters(g,m.b).map(p=>p.id),recap:[`${['라인전','오브젝트','한타'][strong]} 파워 격차 ${diffs[strong]>=0?'+':''}${diffs[strong].toFixed(1)}. ${diffs[strong]>=0?'우리 팀이 우위를 만들었습니다.':'상대가 전반적인 전력에서 앞섰습니다.'}`,`${['라인전','오브젝트','한타'][weak]}에서 ${Math.abs(diffs[weak]).toFixed(1)}의 전력 ${diffs[weak]<0?'열세':'우위'}. ${weak===2?'피로와 조합, 팀 호흡을 함께 확인하세요.':weak===1?'정글·서포터 훈련과 운영 전술을 검토하세요.':'라인 주도권과 우선 라인을 조정해 보세요.'}`,`${endLine} 마지막 교전 우리 팀 승리 확률은 ${(m.a===g.teamId?lastTf.prob:100-lastTf.prob).toFixed(1)}%였습니다. 확률이 승리를 보장하지는 않습니다.`,`이 세트 POG ${ws[pogSlot].name}(${ROLES[pogSlot]}) — ${whyPog.join(', ')}. 승리 팀 5인의 실제 사건 기여를 합산해 뽑았습니다.`]};
 }
 function finishMatch(g:Game,m:Match){m.winner=m.scoreA>m.scoreB?m.a:m.b;const a=team(g,m.a),b=team(g,m.b);if(g.stage==='REGULAR'){a.sw+=m.scoreA;a.sl+=m.scoreB;b.sw+=m.scoreB;b.sl+=m.scoreA;(m.winner===m.a?a:b).wins++;(m.winner===m.a?b:a).losses++;}for(const t of [a,b]){for(const p of g.players.filter(p=>new Set(m.sets.flatMap(s=>t.id===m.a?s.lineupA:s.lineupB)).has(p.id))){p.burn=clamp(p.burn+4);p.form=clamp(p.form+(t.id===m.winner?2:-2));}t.familiarity[key(t)]=clamp((t.familiarity[key(t)]??20)+1,20,100);}
  for(const set of m.sets){const p=g.players.find(p=>p.id===set.pog);if(p)p.pog++;}

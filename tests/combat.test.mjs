@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {newGame,upgradeGame,simulateSet,starters,ROLES,random,hash} from '../lib/game.ts';
+import {newGame,upgradeGame,simulateSet,starters,ROLES,random,hash,CHAMPIONS} from '../lib/game.ts';
 import {newMatchState,resolveObjective,resolveTeamfight,resolveSiege} from '../lib/simulation/combat.ts';
 
 function controlledBase(){
@@ -582,4 +582,89 @@ const CRNG=()=>random(hash('obj-test'));
  }
 }
 
-console.log('PASS combat: determinism, kill/survival invariants, narration binding, ability→action linkage, bot 2v2 linkage, objective participants/secure/reward/carry, unit-3 unsecured-objective separation, resource sign, unit-4 teamfight contract, unit-5 siege (window/ADC-contrib/order/no-double-reward/nexus-only-end/cap-vs-nexus)');
+// --- 11. 단위 6: POG를 실제 개인 기여로 계산 ---
+// 재추첨·재계산 없이 사건(combat) 원자료만 합산한다. POG = 승리 팀 최댓값 슬롯. 이유 문자열은 실제 사건과 일치한다.
+{
+ // 승리 팀 라인업에서 POG 슬롯을 찾는다.
+ const pogSlot=r=>(r.winner===REAL.a?r.lineupA:r.lineupB).indexOf(r.pog);
+ // 사건 원자료에서 (side,slot)의 기여 태그를 독립적으로 다시 센다(엔진 가중치와 무관).
+ const rawTally=(events,side,slot)=>{
+  let kills=0,assists=0,tfInv=0,protects=0,objSec=0,siegeS=0,nexus=false;
+  for(const e of events){const cb=e.combat;if(!cb)continue;
+   for(const k of cb.kills){
+    if(k.killer.side===side&&k.killer.slot===slot)kills++;
+    for(const as of k.assists)if(as.side===side&&as.slot===slot)assists++;
+   }
+   if(cb.kind==='objective'&&cb.objective.secured===side)
+    for(const p of cb.participants)if(p.side===side&&p.slot===slot)objSec++;
+   if(cb.kind==='teamfight')for(const c of cb.fight.contrib)
+    if(c.ref.side===side&&c.ref.slot===slot){tfInv+=c.kill;protects+=c.protect;}
+   if(cb.kind==='siege'){
+    if(cb.siege.structuresDown>0)for(const p of cb.participants)if(p.side===side&&p.slot===slot)siegeS+=cb.siege.structuresDown;
+    if(cb.siege.nexus)for(const p of cb.participants)if(p.side===side&&p.slot===slot)nexus=true;
+   }
+  }
+  return {kaTot:kills+assists+Math.round(tfInv),protects:Math.round(protects),objSec,siegeS,nexus};
+ };
+
+ // 11a. 결정성: 같은 게임·시드에서 pog·pogReason 불변.
+ {
+  g0.seed=91;
+  const x=simulateSet(g0,REAL),y=simulateSet(g0,REAL);
+  assert.equal(x.pog,y.pog,'pog 결정적');
+  assert.equal(x.pogReason,y.pogReason,'pogReason 결정적');
+  assert.ok(typeof x.pogReason==='string'&&x.pogReason.length>0,'pogReason 문자열');
+ }
+
+ // 11b. POG는 승리 팀 선발 5인 중 하나.
+ // 11c. pogReason이 실제 사건과 일치: 역할 접두 + 각 항목의 숫자/태그가 원자료 재집계와 같다.
+ {
+  let checked=0;
+  for(let s=0;s<250;s++){
+   g0.seed=s;const r=simulateSet(g0,REAL);
+   const wLineup=r.winner===REAL.a?r.lineupA:r.lineupB;
+   assert.ok(wLineup.includes(r.pog),`POG는 승리 팀 선수 (seed ${s})`);
+   const side=r.winner===REAL.a?'A':'B', slot=pogSlot(r);
+   assert.ok(slot>=0&&slot<5,'POG 슬롯 유효');
+   const parts=r.pogReason.split(' · ');
+   assert.equal(parts[0],ROLES[slot],`pogReason 역할 접두가 POG 슬롯과 일치 (seed ${s}: ${r.pogReason})`);
+   const t=rawTally(r.events,side,slot);
+   for(const tok of parts.slice(1)){
+    let m;
+    if(m=tok.match(/^(\d+)킬 관여$/)) assert.equal(+m[1],t.kaTot,`킬 관여 수 일치 (seed ${s}: ${r.pogReason})`);
+    else if(m=tok.match(/^한타 딜러 보호 (\d+)회$/)) assert.equal(+m[1],t.protects,`보호 횟수 일치 (seed ${s}: ${r.pogReason})`);
+    else if(m=tok.match(/^오브젝트 (\d+)회 확보$/)) assert.equal(+m[1],t.objSec,`오브 확보 수 일치 (seed ${s}: ${r.pogReason})`);
+    else if(m=tok.match(/^구조물 공성 (\d+)회$/)) assert.equal(+m[1],t.siegeS,`공성 수 일치 (seed ${s}: ${r.pogReason})`);
+    else if(tok==='넥서스 파괴 가담') assert.ok(t.nexus,`넥서스 가담 사실 (seed ${s})`);
+    else if(tok==='라인·운영 주도권') assert.ok(t.kaTot===0&&t.protects===0&&t.objSec===0&&t.siegeS===0&&!t.nexus,`전투 기여 없을 때만 라인 주도권 (seed ${s})`);
+    else assert.fail(`알 수 없는 pogReason 항목: "${tok}" (seed ${s})`);
+   }
+   // POG는 승리 팀에서 전투 기여(킬 관여+보호)가 최소 중앙값 이상 — 역할 고정 점수로 뽑히지 않는다.
+   const involve=[0,1,2,3,4].map(sl=>{const x=rawTally(r.events,side,sl);return x.kaTot+x.protects;}).sort((a,b)=>a-b);
+   const med=involve[2];
+   assert.ok(t.kaTot+t.protects>=med,`POG 전투 기여가 승리 팀 중앙값 이상 (seed ${s}: ${t.kaTot+t.protects} vs med ${med})`);
+   checked++;
+  }
+  assert.ok(checked>=250,'11c 표본 확보');
+ }
+
+ // 11d. 역할 편향 없음: 통제 조합(전스탯 70·대칭 픽)에서 슬롯별 POG 분포가 한 역할로 쏠리지 않는다.
+ {
+  const g=controlledBase();
+  const a=[],b=[];
+  for(const role of ROLES){
+   const pool=CHAMPIONS.filter(c=>c.role===role);
+   let pair;for(const c of pool){const o=pool.find(d=>d.id!==c.id&&d.type===c.type&&JSON.stringify(d.tags)===JSON.stringify(c.tags));if(o){pair=[c,o];break;}}
+   a.push(pair[0].id);b.push(pair[1].id);
+  }
+  const m={id:'p11d',a:'nva',b:'crn',bestOf:3,scoreA:0,scoreB:0,sets:[],label:'C',draft:{picksA:a,picksB:b,bans:[],actions:[]}};
+  const dist=[0,0,0,0,0];const N=600;
+  for(let s=0;s<N;s++){g.seed=s;const r=simulateSet(g,m);dist[pogSlot(r)]++;}
+  const frac=dist.map(x=>x/N);
+  assert.ok(frac.every(f=>f>0.03),`모든 역할이 POG로 뽑힌다: ${frac.map(f=>(f*100).toFixed(1)+'%').join(' ')}`);
+  assert.ok(Math.max(...frac)<0.5,`한 역할이 POG를 독식하지 않는다: ${frac.map(f=>(f*100).toFixed(1)+'%').join(' ')}`);
+  console.log(`  · 11d: POG 슬롯 분포(TOP JGL MID ADC SUP) — ${frac.map(f=>(f*100).toFixed(1)+'%').join(' ')}`);
+ }
+}
+
+console.log('PASS combat: determinism, kill/survival invariants, narration binding, ability→action linkage, bot 2v2 linkage, objective participants/secure/reward/carry, unit-3 unsecured-objective separation, resource sign, unit-4 teamfight contract, unit-5 siege (window/ADC-contrib/order/no-double-reward/nexus-only-end/cap-vs-nexus), unit-6 POG (real-contribution aggregation, reason↔events match, no role bias)');

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {newGame,upgradeGame,simulateSet,starters,ROLES,random,hash,CHAMPIONS} from '../lib/game.ts';
-import {newMatchState,resolveObjective,resolveTeamfight,resolveSiege} from '../lib/simulation/combat.ts';
+import {newMatchState,resolveObjective,resolveTeamfight,resolveSiege,hasArrived,regionTime,REGION_DIST} from '../lib/simulation/combat.ts';
 
 function controlledBase(){
  const g=upgradeGame(newGame('nva',1));
@@ -386,6 +386,130 @@ const CRNG=()=>random(hash('obj-test'));
  }
 }
 
+// --- 9.5 D022: 이동↔전투 참여 단일 계약(hasArrived) — 직접 구성한 상태로 검증 ---
+// 실제 시드 탐색이 아니라, mkState로 region·freeAt을 직접 조작해 5가지 요구 시나리오와
+// 필수 불변 조건을 결정적으로 증명한다(오류 탐지 테스트가 아니라 계약 자체의 회귀 방지 테스트).
+{
+ const seedRng=tag=>random(hash(tag));
+ const FR='mid'; // seq 9(≠5,6) → resolveTeamfight의 fightRegion='mid'
+ const notJoinedOf=(ce,side,slot)=>(ce.notJoined||[]).find(n=>n.ref.side===side&&n.ref.slot===slot);
+ const isParticipant=(ce,side,slot)=>ce.participants.some(p=>p.side===side&&p.slot===slot);
+ const contribOf=(ce,side,slot)=>ce.fight.contrib.find(c=>c.ref.side===side&&c.ref.slot===slot);
+
+ // 시나리오 1: 이전 교전 때문에 출발이 늦어진 선수 — top에서 이동을 마쳤어야 할 시각이 한타 시각을
+ // 1초 넘긴다(hasArrived 경계값 바로 아래). 도착 전이므로 이번 한타에 참여하지 못한다.
+ {
+  const clock=1080;
+  const short=regionTime('top','mid')-1; // 딱 1초 부족
+  const st=mkState(s=>{ s.A[0].region='top'; s.A[0].freeAt=clock-short; });
+  assert.ok(!hasArrived(st.A[0],FR,clock),'사전 조건: hasArrived가 false를 계산해야 시나리오 성립');
+  const ce=resolveTeamfight(st,9,true,0.3,clock,seedRng('d022-1'));
+  assert.equal(ce.fight.aliveA,4,'도착 못한 1명은 aliveA에서 빠진다(원 생존 인원 5명과 다름)');
+  assert.ok(!isParticipant(ce,'A',0),'미도착 선수는 participants에 없다');
+  assert.ok(!contribOf(ce,'A',0),'미도착 선수는 기여(contrib)도 없다 — 도착 전 공격·보호 행동 없음');
+  const nj=notJoinedOf(ce,'A',0);
+  assert.ok(nj,'미도착 선수는 notJoined에 기록된다');
+  assert.equal(nj.reason,'이동 중(도착 전)','사망이 아니라 이동 중이라는 이유가 붙는다(리스폰 대기와 구분)');
+  assert.ok(st.A[0].alive,'미도착이라고 사망 처리되지 않는다(살아있는 채로 계속 이동 중)');
+ }
+
+ // 시나리오 2: 처치 전에 도착하지 못한 선수 — 위 시나리오의 결과에서, 그 선수는 어떤 처치에도
+ // 처치자·어시스트로 등장하지 않는다(합류 전 처치엔 기여 없음).
+ {
+  const clock=1080;
+  const short=regionTime('top','mid')-1;
+  const st=mkState(s=>{ s.A[0].region='top'; s.A[0].freeAt=clock-short; });
+  const ce=resolveTeamfight(st,9,true,0.3,clock,seedRng('d022-2'));
+  for(const k of ce.kills){
+   assert.ok(!(k.killer.side==='A'&&k.killer.slot===0),'미도착 선수는 처치자가 될 수 없다');
+   assert.ok(!k.assists.some(a=>a.side==='A'&&a.slot===0),'미도착 선수는 어시스트가 될 수 없다');
+  }
+ }
+
+ // 시나리오 3: 부활 후 이동 중인 선수 — 죽어 있던 정글러가 이 한타 시각 6초 전에 부활했다.
+ // reviveByClock이 region='base', freeAt=respawnAt으로 되돌리므로, base→mid 이동 시간(18초)을
+ // 채우지 못해 도착하지 못한다 — 이때 이유는 '리스폰 대기'가 아니라 '이동 중(도착 전)'이어야 한다
+ // (부활은 끝났고, 지금은 순수 이동 문제이기 때문).
+ {
+  const clock=1080;
+  const st=mkState(s=>{ s.A[1].alive=false; s.A[1].respawnAt=clock-6; });
+  const ce=resolveTeamfight(st,9,true,0.3,clock,seedRng('d022-3'));
+  assert.ok(st.A[1].alive,'부활 시각이 지났으므로 되살아나 있다');
+  assert.equal(st.A[1].region,'base','부활 직후 위치는 기지');
+  assert.ok(!hasArrived(st.A[1],FR,clock),'기지→mid 이동 시간을 채우지 못해 미도착');
+  assert.ok(!isParticipant(ce,'A',1),'부활 후 이동 중인 선수는 이번 한타 참가자가 아니다');
+  const nj=notJoinedOf(ce,'A',1);
+  assert.equal(nj.reason,'이동 중(도착 전)','부활은 끝났으므로 리스폰 대기가 아니라 이동 중으로 기록');
+ }
+
+ // 시나리오 4: 도착 지연으로 교전 인원이 달라지는 경우 — 원 생존자는 5명이지만 그중 2명이
+ // 아직 이동 중이면 실제 교전 인원(fight.aliveA)은 3명으로 줄어야 한다(단순 alive 카운트가 아님).
+ {
+  const clock=1080;
+  const short=regionTime('top','mid')-1;
+  const st=mkState(s=>{
+   s.A[0].region='top'; s.A[0].freeAt=clock-short;
+   s.A[2].region='bot'; s.A[2].freeAt=clock-(regionTime('bot','mid')-1);
+  });
+  const rawAlive=[0,1,2,3,4].filter(sl=>st.A[sl].alive).length;
+  assert.equal(rawAlive,5,'전제: 5명 모두 생존');
+  const ce=resolveTeamfight(st,9,true,0.3,clock,seedRng('d022-4'));
+  assert.equal(ce.fight.aliveA,3,'도착 게이트를 통과한 3명만 실제 교전 인원');
+ }
+
+ // 시나리오 5: 교전 후 공성까지 위치가 이어지는 경우 — 한타 종료 위치(river/mid)가 기지로
+ // 재설정되지 않고, 다음 공성의 이동 시간 계산에 그대로 이어진다(사건 경계에서 위치 연속성 유지).
+ {
+  const clock=1080;
+  const st=mkState();
+  const tf=resolveTeamfight(st,9,true,0.3,clock,seedRng('d022-5'));
+  assert.equal(st.region.A,FR,'한타 직후 팀 무게중심이 기지로 리셋되지 않고 한타 지역에 남는다');
+  assert.equal(st.region.B,FR);
+  for(const sl of [0,1,2,3,4]) if(st.A[sl].alive)
+   assert.equal(st.A[sl].region,FR,'실제로 도착해 싸운 생존자는 개인 위치도 한타 지역으로 갱신된다');
+  const sg=resolveSiege(st,10,st.clock,seedRng('d022-5s'));
+  if(sg.siege && sg.siege.result!=='RESET'){
+   const atk=sg.siege.side;
+   for(const sl of [0,1,2,3,4]) if(st[atk][sl].alive)
+    assert.equal(st[atk][sl].region,'river','공성 참가자는 사건 종료 후 중앙(river)으로 이어진다(기지 순간이동 아님)');
+  }
+ }
+
+ // 필수 불변 조건 — 여러 무작위 도착-지연 구성에서 일괄 확인.
+ {
+  for(let s=0;s<300;s++){
+   const clock=1080+s;
+   const partial=s%3; // 0=지연 없음, 1=A 한 명 지연, 2=B 한 명 지연
+   const st=mkState(m=>{
+    if(partial===1){ m.A[s%5].region='top'; m.A[s%5].freeAt=clock-(regionTime('top','mid')-1); }
+    if(partial===2){ m.B[s%5].region='bot'; m.B[s%5].freeAt=clock-(regionTime('bot','mid')-1); }
+   });
+   const ce=resolveTeamfight(st,9,s%2===0,0.25,clock,seedRng('d022-inv-'+s));
+   // (1) 처치자는 처치 시각에 생존·도착해 있다.
+   for(const k of ce.kills){
+    assert.ok(isParticipant(ce,k.killer.side,k.killer.slot),'처치자는 이 한타의 참가자(=도착)여야 한다');
+    // (2) 어시스트는 이 처치에 유효하게 기여한(같은 팀·참가자) 인원이다.
+    for(const a of k.assists){
+     assert.equal(a.side,k.killer.side,'어시스트는 처치자와 같은 팀');
+     assert.ok(isParticipant(ce,a.side,a.slot),'어시스트도 참가자(=도착)여야 한다');
+    }
+   }
+   // (3) 도착 전 공격·보호 행동 없음 — notJoined에 '이동 중'으로 기록된 인원은 contrib에 없다.
+   for(const nj of ce.notJoined||[]){
+    if(nj.reason==='이동 중(도착 전)') assert.ok(!contribOf(ce,nj.ref.side,nj.ref.slot),'미도착 인원은 기여 없음');
+   }
+  }
+ }
+
+ // (5) 동일 시드·입력 → 결정적 동일 결과(도착 게이트가 새 난수를 쓰지 않음을 재확인).
+ {
+  const build=()=>mkState(m=>{ m.A[0].region='top'; m.A[0].freeAt=1080-(regionTime('top','mid')-1); });
+  const a=resolveTeamfight(build(),9,true,0.3,1080,seedRng('d022-det'));
+  const b=resolveTeamfight(build(),9,true,0.3,1080,seedRng('d022-det'));
+  assert.equal(JSON.stringify(a),JSON.stringify(b),'도착 게이트 포함 결과도 결정적이다');
+ }
+}
+
 // --- 10. 단위 5: 공성(resolveSiege) — 구조물 진행 · 종료 · 이중 보상 방지 ---
 {
  const seedRng=tag=>random(hash(tag));
@@ -672,4 +796,4 @@ const CRNG=()=>random(hash('obj-test'));
  }
 }
 
-console.log('PASS combat: determinism, kill/survival invariants, narration binding, ability→action linkage, bot 2v2 linkage, objective participants/secure/reward/carry, unit-3 unsecured-objective separation, resource sign, unit-4 teamfight contract, unit-5 siege (window/ADC-contrib/order/no-double-reward/nexus-only-end/cap-vs-nexus), unit-6 POG (real-contribution aggregation, reason↔events match, no role bias)');
+console.log('PASS combat: determinism, kill/survival invariants, narration binding, ability→action linkage, bot 2v2 linkage, objective participants/secure/reward/carry, unit-3 unsecured-objective separation, resource sign, unit-4 teamfight contract, D022 이동↔전투 참여 단일 계약(직접 구성한 상태: 이전 교전 지연·처치 전 미도착·부활 후 이동 중·인원차 변화·한타→공성 위치 연속성, 필수 불변 조건 300건, 결정성), unit-5 siege (window/ADC-contrib/order/no-double-reward/nexus-only-end/cap-vs-nexus), unit-6 POG (real-contribution aggregation, reason↔events match, no role bias)');

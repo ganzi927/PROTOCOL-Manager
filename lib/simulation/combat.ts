@@ -18,6 +18,9 @@ export type Combatant={
  alive:boolean, respawnAt:number,          // 초
  kills:number, deaths:number, assists:number,
  gold:number,                              // 개인 자원(세트 누적, 기준 0)
+ region:Region, freeAt:number,             // 이동↔전투 참여 단일 계약(D022): 마지막으로 확인된 위치 ·
+                                            // 그 위치에서 이동을 시작할 수 있는 시각(직전 행동이 끝난 시각).
+                                            // hasArrived()가 다음 사건 참여 자격을 이 값들로만 판정한다.
 };
 export type Ref={side:Side,slot:number};
 export type KillRec={killer:Ref,victim:Ref,assists:Ref[],clock:number};
@@ -77,6 +80,7 @@ export function newMatchState(
   side,slot,role:p.role,champ:picks[slot]??'',player:p.name,stats:p.stats.slice(),
   mastery:masteryFn(side,slot),off:offRoleFn(side,slot),
   alive:true,respawnAt:0,kills:0,deaths:0,assists:0,gold:0,
+  region:'base' as Region,freeAt:0,
  }));
  return {A:mk('A',aStarters,aPicks),B:mk('B',bStarters,bPicks),firstKillDone:false,lastGankSeq:null,jglCommits:{A:0,B:0},pendingObjective:null,
   clock:0,struct:{A:[0,0,0],B:[0,0,0]},baseTurrets:{A:2,B:2},nexus:{A:false,B:false},lanePush:{A:[0,0,0],B:[0,0,0]},region:{A:'base',B:'base'},events:[]};
@@ -95,6 +99,12 @@ export const REGION_DIST:Record<Region,Record<Region,number>>={
  river:{base:20,top:12,mid:8,bot:12,river:0},
 };
 export const regionTime=(from:Region,to:Region)=>REGION_DIST[from][to];
+// 이동↔전투 참여 단일 계약(D022): 이 조합원이 targetRegion에 clock까지 도착할 수 있는지 —
+// 새 확률 롤 없음(결정적 기하). freeAt(직전 행동 종료 시각) + regionTime(마지막 위치→목표) <= clock.
+// 기존 확률 기반 참가 판정(예: resolveObjective의 arriveP)과 겹치지 않는다 — 이 게이트를 통과한
+// 인원 안에서만 그 확률이 작동한다(같은 실패 확률을 두 번 적용하지 않음).
+export const hasArrived=(c:Combatant,targetRegion:Region,clock:number)=>
+ c.freeAt+regionTime(c.region,targetRegion)<=clock;
 const opp=(s:Side):Side=>s==='A'?'B':'A';
 // 유효 능력 = 기본 스탯 + 숙련(레벨당 +2) − 오프롤 페널티. game.ts의 OFFROLE_PEN(6)과 맞춘다.
 const eff=(c:Combatant,k:number)=>c.stats[k]+c.mastery*2-(c.off?6:0);
@@ -102,7 +112,10 @@ const RESPAWN=(clock:number)=>10+Math.min(42,clock/60*1.5); // 초, 게임 시�
 
 // 죽은 선수 되살리기(다음 단위의 오브젝트/한타에서 사용). 이번 단위 라인 0·1에선 아무도 안 죽은 상태로 진입.
 export function reviveByClock(st:MatchState,clock:number){
- for(const c of [...st.A,...st.B]) if(!c.alive && clock>=c.respawnAt){ c.alive=true; c.respawnAt=0; }
+ for(const c of [...st.A,...st.B]) if(!c.alive && clock>=c.respawnAt){
+  const at=c.respawnAt; c.alive=true; c.respawnAt=0;
+  c.region='base'; c.freeAt=at; // 사망자는 부활 후 기지에서 실제 이동을 시작한다(부활 시각부터 이동 가능).
+ }
 }
 
 const KILL_G=300, ASSIST_G=150, CS_HEAVY=150, CS_LIGHT=110, DEATH_G=210;
@@ -412,11 +425,20 @@ export function resolveTeamfight(
 ):CombatEvent{
  reviveByClock(st,clock);
  const favSide:Side=edgeA?'A':'B', othSide:Side=edgeA?'B':'A';
- const alive=(s:Side)=>[0,1,2,3,4].filter(sl=>st[s][sl].alive);
+ const fightRegion:Region=seq===5||seq===6?'river':'mid';
+ // 도착 게이트(이동↔전투 참여 단일 계약, D022): 생존자 중 이 한타 시각까지 fightRegion에 실제로
+ // 도착할 수 있는 인원만 싸운다(hasArrived — 새 확률 없음). 도착 못한 생존자는 이번 한타에 끼지
+ // 않는다(소급 참여 없음) — notJoined에 남고, 다음 사건에서 자기 위치·시각 기준으로 재평가된다.
+ const alive=(s:Side)=>[0,1,2,3,4].filter(sl=>st[s][sl].alive&&hasArrived(st[s][sl],fightRegion,clock));
  const aA0=alive('A'), aB0=alive('B');
  const partRefs:Ref[]=[...aA0.map(sl=>({side:'A' as Side,slot:sl})),...aB0.map(sl=>({side:'B' as Side,slot:sl}))];
  const notJoined:{ref:Ref,reason:string}[]=[];
- for(const s of ['A','B'] as Side[]) for(let sl=0;sl<5;sl++) if(!st[s][sl].alive) notJoined.push({ref:{side:s,slot:sl},reason:'전투 이탈(리스폰 대기)'});
+ for(const sl of [0,1,2,3,4]){
+  if(!st.A[sl].alive) notJoined.push({ref:{side:'A',slot:sl},reason:'전투 이탈(리스폰 대기)'});
+  else if(!aA0.includes(sl)) notJoined.push({ref:{side:'A',slot:sl},reason:'이동 중(도착 전)'});
+  if(!st.B[sl].alive) notJoined.push({ref:{side:'B',slot:sl},reason:'전투 이탈(리스폰 대기)'});
+  else if(!aB0.includes(sl)) notJoined.push({ref:{side:'B',slot:sl},reason:'이동 중(도착 전)'});
+ }
  const nFav=(favSide==='A'?aA0:aB0).length, nOth=(favSide==='A'?aB0:aA0).length;
 
  const res=[0,0,0,0,0, 0,0,0,0,0];
@@ -461,7 +483,7 @@ export function resolveTeamfight(
    const doKills=(atk:Side, def:Side, n:number)=>{
     const dSup=st[def][4];
     let adcSafe=false;
-    if(dSup.alive && st[def][3].alive && alive(def).length>1 &&
+    if(alive(def).includes(4) && alive(def).includes(3) && alive(def).length>1 &&
        crng()<clamp01(0.12+(eff(dSup,S_TF)+eff(dSup,S_VIS)-110)/150)){
      adcSafe=true; cRec({side:def,slot:4})!.protect+=1;
      ev.push(`${dSup.player}의 보호로 ${st[def][3].player} 생존`);
@@ -510,9 +532,11 @@ export function resolveTeamfight(
  }
  const resource=[0,1,2,3,4].map(s=>res[s]-res[5+s]);
  // 경기 시계·위치 진행: 교전은 한 지역에서 벌어지고 ~30초를 쓴다(연출 재생 시각과 별개).
- const fightRegion:Region=seq===5||seq===6?'river':'mid';
  st.region.A=fightRegion; st.region.B=fightRegion;
  st.clock=clock+14;   // 교전 자체는 짧다. 큰 시간은 후속 이동·공성(resolveSiege).
+ // 실제로 도착해 싸운 생존자만 위치·가용 시각 갱신 — 이번에 못 낀 인원은 계속 '이동 중'(다음 사건에서 재평가).
+ for(const sl of aA0) if(st.A[sl].alive){ st.A[sl].region=fightRegion; st.A[sl].freeAt=st.clock; }
+ for(const sl of aB0) if(st.B[sl].alive){ st.B[sl].region=fightRegion; st.B[sl].freeAt=st.clock; }
  // 라인 압박: 결판 승자가 다음 공성의 라인 우선순위를 얻는다(추상값, 미니언 아님). 매 사건 소폭 감쇠.
  for(const s of ['A','B'] as Side[]) for(let L=0;L<3;L++) st.lanePush[s][L]*=0.85;
  if(winner) for(let L=0;L<3;L++) st.lanePush[winner][L]=clampN(st.lanePush[winner][L]+0.18,-1,1.4);
@@ -581,6 +605,9 @@ export function resolveSiege(st:MatchState, seq:number, clock:number, crng:()=>n
 
  if(windowTime<=2){
   st.clock=clock+moveTime+8; st.region[atkSide]='river'; st.region[defSide]='base';
+  // freeAt은 st.clock에서 정비 여유(+8)를 뺀다 — 그 여유 시간이 다음 사건으로의 초기 이동에 그대로 쓰인다
+  // (같은 순간에 다음 사건이 바로 이어질 수 있는 스켈레톤 구조상 별도 유휴 시간이 없다 — D022).
+  for(const sl of atk) if(st[atkSide][sl].alive){ st[atkSide][sl].region='river'; st[atkSide][sl].freeAt=clock+moveTime; }
   return mk(atkSide,'NO_WINDOW',lane,[`${atkSide} 진입했지만 ${defSide} 부활 병력 복귀 — 물러납니다`],[0,0,0,0,0,0,0,0,0,0],0,reinforceIn,0,false);
  }
 
@@ -639,6 +666,12 @@ export function resolveSiege(st:MatchState, seq:number, clock:number, crng:()=>n
  st.clock=clock+moveTime+siegeTime+12;                      // + 정비·귀환
  st.region[atkSide]=structuresDown>0?laneRegion:'river';
  st.region[defSide]='base';
+ // 공격 참가자 위치·가용 시각 갱신(이동↔전투 참여 단일 계약, D022) — 다음 한타의 도착 게이트가 참조한다.
+ // 개인 위치는 항상 river(중앙 허브)로 — "+12 정비·귀환" 시간이 뜻하는 바가 정확히 이거다(라인 구석에
+ // 남지 않고 중앙으로 물러난다). st.region[atkSide](라인별 공성 판정에 쓰는 팀 단위 값)는 그대로 둔다.
+ // freeAt은 st.clock에서 정비 여유(+12)를 뺀다 — 스켈레톤 구조상 다음 사건이 같은 순간 바로 이어질 수
+ // 있어(사건 사이 별도 유휴 시간 없음) 이 여유가 곧 다음 사건으로의 초기 이동 시간이 된다.
+ for(const sl of atk) if(st[atkSide][sl].alive){ st[atkSide][sl].region='river'; st[atkSide][sl].freeAt=clock+moveTime+siegeTime; }
  const result:SiegeResult=nexus?'NEXUS':inhib?'INHIB':structuresDown>0?'SIEGE':'HELD';
  return mk(atkSide,result,lane,evd,res,structuresDown,reinforceIn,capacity,nexus);
 }

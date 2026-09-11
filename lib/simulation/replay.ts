@@ -432,8 +432,9 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
    ev.done=true;
    const cb=ev.cb, evPos=WN[ev.node], EC=ev.eclock;
    const evT=Math.max(ev.stime,clock);   // 화면 시각: stime과 현재 tick 중 늦은 쪽(같은 tick 내 사망이 먼저 찍히는 것 방지)
-   // 화면상 도착 추정 시각(2단계 4번 — 합류 전 처치의 어시스트 표시 방지용). 이미 도착=evT, 아직이면 evT+거리/속도(직선 근사,
-   // 표시 필터 목적일 뿐 실제 이동 경로·판정에는 쓰지 않는다 — 처치·기여·POG·골드는 그대로 엔진 값).
+   // 도착 추정 시각(진단 전용, D022): 이미 도착=evT, 아직이면 evT+거리/속도(WALK 그래프 직선 근사).
+   // 화면 필터로 쓰지 않는다 — 합류 판정은 이제 combat.ts의 hasArrived(REGION 기반)가 원본에서 결정하고,
+   // 여기선 그 결정과 WALK 그래프 기하 모델이 어긋나는 사례를 diag로만 남긴다(아래 어시스트 진단).
    const arrivalEst:Record<string,number>={};
    for(const r of ev.parts){
     const a=ag(r); if(ev.notJoined.some(n=>n.side===r.side&&n.slot===r.slot)) continue;
@@ -473,12 +474,15 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
    (ev.kills as any[]).forEach((k,ki)=>{
     const kt=evT+ki*3;
     scoreA+=k.killer.side==='A'?1:0; scoreB+=k.killer.side==='B'?1:0;
-    // 화면 어시스트 표시는 도착 추정 시각이 이 처치 시각 이전인 선수만(2단계 4번 — 합류 전 처치엔 어시스트 미표시).
-    // 엔진의 실제 어시스트 골드·기여(POG)는 그대로 — 이건 표시(kill feed) 필터일 뿐.
-    const visibleAssists=(k.assists??[]).filter((x:any)=>(arrivalEst[x.side+x.slot]??evT)<=kt);
+    // 어시스트는 엔진의 원본 사건 그대로 표시한다(D022 — 화면 전용 필터로 숨기지 않는다).
+    // 한타는 이제 combat.ts의 도착 게이트(hasArrived)가 참가자 자체를 걸러 이 시점엔 이미 실제로
+    // 도착한 선수만 남아 있다 — 공식 KDA·킬 피드·중계·골드·POG가 같은 cb.kills/participants를 쓴다.
+    // arrivalEst(순수 WALK 그래프 기하 추정)는 이 엔진 결정과 어긋나는지 보는 진단 전용으로만 남긴다.
+    for(const x of (k.assists??[])) if((arrivalEst[x.side+x.slot]??evT)>kt)
+     diag.push(`#${ev.idx}: ${x.side}${x.slot} 어시스트 도착 모순 — 엔진은 인정, WALK 추정은 처치 시각(${kt.toFixed(0)}s) 이후 도착(${arrivalEst[x.side+x.slot].toFixed(0)}s)`);
     beats.push({t:T(kt),seq:ev.idx,engineClock:EC,kind:'kill',
      ref:{side:k.victim.side,slot:k.victim.slot},by:{side:k.killer.side,slot:k.killer.slot},
-     assists:visibleAssists.map((x:any)=>({side:x.side,slot:x.slot})),
+     assists:(k.assists??[]).map((x:any)=>({side:x.side,slot:x.slot})),
      side:k.killer.side,scoreDelta:[k.killer.side==='A'?1:0,k.killer.side==='B'?1:0],
      fb:!!cb.firstBlood&&ki===0,text:cb.firstBlood&&ki===0?'FIRST BLOOD':'처치'});
     const v=ag({side:k.victim.side,slot:k.victim.slot});

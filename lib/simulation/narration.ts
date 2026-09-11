@@ -291,8 +291,9 @@ export function narrateEvent(c:NarrCtx,mem:NarrMemory,rng:()=>number):NarrateRes
   at(30,'한타', even
    ? pick(rng,[`${pick(rng,FIGHT_PLACE)} 앞에서 양 팀 5인이 진형을 잡습니다.`,`${wShort}가 오브젝트를 압박하며 상대를 끌어냅니다.`])
    : `${pick(rng,FIGHT_PLACE)} 앞 교전 — ${c.aShort} ${nA}인, ${c.bShort} ${nB}인. 인원이 맞지 않습니다.`);
+  // D022: notJoined 사유가 사망(부활 대기)뿐 아니라 도착 게이트(이동 중)도 있을 수 있어 실제 사유를 그대로 쓴다.
   const late=(cb.notJoined||[]).slice(0,2);
-  if(late.length)at(20,'공백', `${late.map(n=>`${nm(n.ref)}(부활 대기)`).join(', ')} — 이번 한타에 빠집니다.`);
+  if(late.length)at(20,'공백', `${late.map(n=>`${nm(n.ref)}(${n.reason.includes('리스폰')?'부활 대기':'도착 전'})`).join(', ')} — 이번 한타에 빠집니다.`);
 
   // 진입 / 보호
   if(fr.result!=='NO_ENGAGE'&&fr.result!=='NO_SHOW'&&initiator&&initiator.engage>0)

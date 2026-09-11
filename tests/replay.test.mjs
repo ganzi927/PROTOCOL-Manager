@@ -102,10 +102,17 @@ const edgeSet=new Set(MAP.edges.flatMap(([a,b])=>[a+'|'+b,b+'|'+a]));
    for(const nj of (e.combat.notJoined||[])){
     const tr=rd.tracks.find(t=>t.side===nj.ref.side&&t.slot===nj.ref.slot);
     for(let t=from;t<=w.end;t+=0.3){
-     const {pos,state}=posAt(tr,t);
+     const {pos,state,reason}=posAt(tr,t);
      if(state==='dead')continue;
-     const d=Math.hypot(pos[0]-evNode[0],pos[1]-evNode[1]);
-     assert.ok(d>4,`불참자가 사건 위치에 없음 (seed ${seed}, #${e.index}, ${nj.ref.side}${nj.ref.slot} d=${d.toFixed(1)} @t${t.toFixed(1)})`);
+     // 불참자가 '이 사건'을 위해 교전 상태로 표시되면 안 된다(D022: 도착 게이트로 한쪽이 전원
+     // 불참하는 사건이 늘어나 다음 사건이 그 tail 창과 겹쳐 시작할 수 있음 — 그 경우 이 트랙이
+     // '다른' 사건(reason의 #번호가 다름)으로 fight 상태여도 정상이므로 사건 번호까지 확인한다.
+     const forThis=state==='fight'&&reason&&reason.startsWith(`#${e.index} `);
+     assert.ok(!forThis,`불참자가 이 사건 교전 상태로 표시되지 않음 (seed ${seed}, #${e.index}, ${nj.ref.side}${nj.ref.slot} @t${t.toFixed(1)} reason=${reason})`);
+     if(!nj.reason.includes('도착')&&!nj.reason.includes('이동')&&state!=='fight'){
+      const d=Math.hypot(pos[0]-evNode[0],pos[1]-evNode[1]);
+      assert.ok(d>4,`불참(리스폰/라인 처리)자가 사건 위치에 없음 (seed ${seed}, #${e.index}, ${nj.ref.side}${nj.ref.slot} d=${d.toFixed(1)} @t${t.toFixed(1)})`);
+     }
     }
    }
    const parts=new Set(e.combat.participants.map(p=>p.side+p.slot));

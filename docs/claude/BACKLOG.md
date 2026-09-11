@@ -10,7 +10,7 @@
 | COMP-01 | P1 | IN_PROGRESS | 조합 승률·메타·AI 밴픽 확장(PROTOCOL-Composition-Meta-Design.md). 단계 2 첫 슬라이스(조합 프로필→구간 효과, 단일 경로) 완료 (2026-09-10, D008). 다음: 단계 3~6 |
 | CAST-01 | P1 | IN_PROGRESS | 구조화된 중계. 1차(사건 기억·준비 beats·강도 tier·감독 레버·밀도 토글) 완료 (2026-09-10, D009). 다음: 참여자 상세·다중 조합 콜백·리캡 확대 |
 | MINIMAP-01/02 | P1 | IN_PROGRESS | 이동형 미니맵. 1단계(D013)·지속형 에이전트(D016)·엔진 REGION_DIST 이동 정합+구조물 SVG(D018) 완료. 다음: 접근 도착↔합류 판정 통합(별도 체크포인트), 모바일/탭전환 브라우저 확인, 애니 다듬기. 아래 "MINIMAP-01" 절 참조 |
-| MATCH-SYS | P1 | IN_PROGRESS | ABIL-01·COMP-01·CAST-01을 하나의 경기 시스템으로 통합. 단위 1(D010)·2(D011)·3(D012)·4(D014)·5(D015)·5 정합성 점검(D017: behind 게이트 제거·CAP 시간/사건 분리·ADC 통제 실험) 완료. 다음: 단위 6(표시 데이터 통합 — POG·골드 그래프·리캡). 아래 "MATCH-SYS" 절 참조 |
+| MATCH-SYS | P1 | IN_PROGRESS | ABIL-01·COMP-01·CAST-01을 하나의 경기 시스템으로 통합. 단위 1(D010)·2(D011)·3(D012)·4(D014)·5(D015)·5 점검(D017)·6 첫 슬라이스(D019: POG를 실제 사건 기여로, `pogReason`) 완료. 다음: 단위 6 step 5(리캡을 근거 사건화). 아래 "MATCH-SYS" 절 참조 |
 | SAVE-01 | P1 | TODO | v1/v2와 서로 다른 v3 형태의 마이그레이션 검증 |
 | DRAFT-01 | P2 | TODO | 선택/스왑 후 선수별 정확한 보정 표시 |
 | DOC-01 | P2 | TODO | 기존 GDD·README를 현행140종/Lv4/스왑 기준으로 통합 |
@@ -90,14 +90,13 @@
 - **신뢰구간**: `pairedCI` McNemar 산식 주석 + 페어 원자료(b,c). balance-review는 `m.id` 차이로 서로소 모집단 → 작은 강화(SUP_VIS +0.4 vs +2.2)는 부호 흔들림, 큰 강화(ADC_CAR·SUP_TF·팀+10)는 일치. VALIDATION 2026-09-11 절에 복구·설명.
 - 검증: N=6000 — NEXUS 97.62% / CAP 2.38%. 7개 스위트·tsc·build PASS. 커밋 `7167829`.
 
-### 단위 6 — 표시 데이터 통합 (ABIL-01 Phase 4 + 중계 후속) ← 다음
-**정확한 첫 작업**: POG를 실제 개인 기여로 계산한다(현재는 `simulateSet` 말미의 역할별 고정 가중치 `contrib[]` 근사).
-1. `SetResult`에 세트 전체 개인 기여 집계를 추가: 각 사건의 `combat.fight.contrib`(kill/engage/protect/damage/survived) + `combat.siege`의 공성 참여 + 오브 확보 참여 + 갱킹 킬/어시를 슬롯별로 합산. 이미 사건 데이터에 다 있으므로 **재추첨·재계산 없이 합**.
-2. POG = 그 집계의 최댓값 슬롯(승리 팀). 동점은 kill 관여 → protect 성공 → 생존/후속 행동 순. 역할별 고정 점수만으로 뽑지 않는다. 선정 이유 문자열을 실제 사건(예: "3번 한타 보호 2회 + 넥서스 공성 참여")과 연결.
-3. `damage`는 "가상 점수" — POG 설명에 '실제 피해량 X'으로 쓰지 않는다(체력·피해 시스템 없음, 단위 6 범위 밖으로 명시).
-4. 골드 그래프: `SetResult.leadA` + 사건별 `e.goldA/goldB`(이미 저장) 사용. 중계와 다른 골드 별도 생성 금지. 재생 스포일러 방지 유지(replay `stateAt` 이미 처리).
-5. 리캡: `recap[]`를 실제 기여 선수·근거 사건·흐름 바꾼 장면(반전 beat·첫 구조물·넥서스)으로. "이 선수 덕분에 +8%" 같은 미계산 설명 금지.
-6. 검증: 같은 사건 → 같은 POG(결정성), POG 이유가 실제 사건과 일치, 역할 편향 없음(통제 실험에서 슬롯별 POG 분포), 골드 그래프가 중계 골드와 동일.
+### 단위 6 — 표시 데이터 통합 (ABIL-01 Phase 4 + 중계 후속)
+1. ✅ (D019) `SetResult`에 개인 기여 집계 = 각 사건의 `combat.kills`(처치·어시·FB) + `combat.fight.contrib`(kill/engage/protect/damage/survived) + `combat.siege`의 공성 참여·넥서스 + 오브 확보 참여를 슬롯별로 합산. **재추첨·재계산 없음** — 승부·골드·중계 난수 미소비, `p`·`lead`·`advantage` 불변.
+2. ✅ (D019) POG = 그 집계의 최댓값 슬롯(승리 팀). tiebreak: 전투 기여(`kaW+tfW`) → 보호(`protW`) → 슬롯 순. `SetResult.pogReason` = 실제 사건 원자료로 만든 이유 문자열("<ROLE> · N킬 관여 · 한타 딜러 보호 M회 · …"), 기여 큰 순 최대 3개. `recap[]`에 근거 문장 추가. `app/manager.tsx` PoG 줄에 노출.
+3. ✅ (D019) `damage`는 "가상 점수" — 이유 문자열에 미언급(total엔 ×0.16 소량 반영). 킬 관여 수 = `kills + assists + round(Σ contrib.kill)`.
+4. ✅ (D019, 확인만) 골드 그래프 = `GoldGraph`가 이미 사건별 `e.goldA/goldB`(엔진 골드)를 reveal-gate로 그림. 별도 골드 생성 없음, 스포일러 방지 유지. **코드 변경 불필요**.
+5. ⬜ **← 다음** 리캡: `recap[]`를 실제 기여 선수·근거 사건·흐름 바꾼 장면(반전 beat·첫 구조물·넥서스)으로. "이 선수 덕분에 +8%" 같은 미계산 설명 금지. 훈련 이력 콜백. `narration.ts` `NarrMemory`(반전 beat·FB 시각)와 `firstStructSide`·capDiag를 근거로.
+6. ✅ (D019, POG 부분) 검증: `combat.test` 섹션 11 — 결정성(11a), POG는 승리 팀 선수(11b), POG 이유가 실제 사건과 일치 + 전투 기여 ≥ 승리 팀 중앙값(11c, 250시드), 역할 편향 없음(11d, 600시드 + `teamfight-review`). ⬜ 골드 그래프 = 중계 골드 회귀 테스트는 step 5와 함께.
 
 ### 단위 6 참고 — 원래 목록 (ABIL-01 Phase 4 + 중계 후속)
 - 골드 그래프: 저장된 개인 자원 변화/스냅샷 사용. 중계와 다른 골드 별도 생성 금지. 미공개 미래 사건 노출 금지.

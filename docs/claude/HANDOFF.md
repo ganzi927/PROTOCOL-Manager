@@ -1,7 +1,7 @@
 # 다음 세션 인수인계
 
-갱신: 2026-09-11 / **단위 5 정합성 점검(D017) + 미니맵 이동 정합·구조물(D018) 완료** · MATCH-SYS 단위 1~5(+점검) · MINIMAP 지속형+정합 · 다음 = MATCH-SYS 단위 6(표시 데이터 통합) 또는 MINIMAP 접근 도착↔합류 통합
-Git: `595b3ea`(단위5 문서) → `968360c`(MINIMAP-02, D016) → `7167829`(단위5 점검, D017) → `9e2ac06`(미니맵 이동 정합+구조물+크래시, D018). tag `minimap-pre-persistent` = MINIMAP-02 이전 상태(비교 영상용). 배포 없음.
+갱신: 2026-09-11 / **MATCH-SYS 단위 6 첫 슬라이스(D019): POG를 실제 사건 기여로 계산** · 단위 1~6(POG) · MINIMAP 지속형+정합 · 다음 = 단위 6 step 5(리캡 근거 사건화) 또는 MINIMAP 접근 도착↔합류 통합
+Git: `9e2ac06`(미니맵 이동 정합+구조물+크래시, D018) → `025aedd`(D017/D018 인수인계) → `3198ce2`(단위 6 POG, D019) → (이 문서 커밋). tag `minimap-pre-persistent` = MINIMAP-02 이전 상태(비교 영상용). 배포 없음.
 
 ## 현재 목표
 ABIL-01·COMP-01·CAST-01을 **하나의 경기 시스템**으로 완성한다. 중심 원칙: 엔진이 사건을 계산하고 중계·골드 그래프·POG·리캡·조합 예측이 그 결과만 사용한다. 표시용 별도 추첨 금지, 표시값 전력 이중 반영 금지.
@@ -15,7 +15,8 @@ ABIL-01·COMP-01·CAST-01을 **하나의 경기 시스템**으로 완성한다. 
 - ✅ 단위 4: 참여자 기반 5v5 한타 (D014) — `resolveTeamfight`, edgeA=교전 전 유리함, 승패=실제 처치, pressure=`fight.winner`
 - ✅ 단위 5: 스노볼 + 구조물 기반 종료 (D015) — 실제 경기 시계, `resolveSiege`, 넥서스 파괴로만 정상 종료, 상한(CAP) 별도 사유, pressure는 tiebreak
 - ✅ 단위 5 정합성 점검 (D017) — `behind`(구조물 열세=견제만) 게이트 제거, CAP `CAP_TIME`/`CAP_EVENT` 분리 + `capDiag`, ADC 생존 통제 실험, CI 산식·부호 흔들림 문서화. N=6000: NEXUS 97.62%/CAP 2.38%(전부 EVENT)
-- ⬜ 단위 6: 표시 데이터 통합 ← **다음** — POG를 실제 개인 기여로, 골드 그래프, 리캡을 근거 사건으로
+- ✅ 단위 6 첫 슬라이스 (D019) — **POG를 실제 사건 기여로 계산**. 역할 고정 가중치 → `combat` 원자료(처치·어시·FB / 한타 `fight.contrib` / 공성 참여·넥서스 / 오브 확보) 슬롯별 집계. 재추첨·재계산 없음, `p`·`lead`·`advantage`·난수 불변. `SetResult.pogReason?`(실제 사건으로 만든 이유 문자열). 골드 그래프(step 4)는 이미 정합 → 변경 없음.
+- ⬜ 단위 6 step 5: 리캡 근거 사건화 ← **다음** — `recap[]`를 반전 beat·첫 구조물(`firstStructSide`)·넥서스·`capDiag` 근거로. 훈련 이력 콜백. 골드 그래프=중계 골드 회귀 테스트도 이때.
 
 **MINIMAP**(이동형 미니맵 중계)
 - ✅ 1단계 (D013): 지도·경로 골격 + 바텀 갱킹.
@@ -29,7 +30,27 @@ ABIL-01·COMP-01·CAST-01을 **하나의 경기 시스템**으로 완성한다. 
 사용자 작업본. 140챔피언, mastery 배열(Lv0~4), DraftState, startDraft/draftPick/draftSwap, flex·스왑, 장기 커리어·저장 유지. 이번 변경들로 저장 형식 불변(새 필드 전부 선택, 구세이브는 폴백).
 
 ## 게임 실행 상태
-`npm ci` 완료, 로컬 D1 마이그레이션 적용, `npm run dev` → **http://localhost:5176/** (백그라운드 실행, HMR 반영). Node v22.12.0.
+`npm ci`(node_modules 설치됨), Node v22.12.0. 이번 세션은 dev 서버·브라우저 미기동(정적 분석 + 테스트만). 필요 시 `npm run dev`.
+
+## 완료한 행동/파일 (MATCH-SYS 단위 6 첫 슬라이스 — POG, 결정 D019 · 커밋 `3198ce2`)
+목표: BACKLOG "단위 6" 절의 **정확한 첫 작업 = POG를 실제 개인 기여로 계산**. 골드 그래프(step 4)는 이미 정합이라 확인만. 리캡(step 5)은 후속.
+- `lib/game.ts`:
+  - `SetResult.pogReason?:string` 신규(선택 필드 — 저장 형식 불변, 구세이브 폴백).
+  - `simulateSet` 말미 POG 블록 **재작성**: 역할별 고정 가중치(`e.index` 분기 + 슬롯 상수 배열 `[.15,.15,.2,.3,.2]` 등) → **사건(combat) 원자료 슬롯별 집계** `cSide:{A:SC[5],B:SC[5]}`.
+    - 공통: `combat.kills` 처치 +3.0 / 어시 +1.4 / FIRST BLOOD +1.5.
+    - 갱킹·스커미시 무처치 승리: 그 라인 참가자 +1.0(라인 주도권).
+    - 오브 확보: 확보 팀 합류자 +0.7(정글 slot1 +1.5).
+    - 한타: `cb.fight.contrib[]` 그대로 — `kill·2.2 + engage·1.2 + damage·0.16 + survived·0.25`, `protect·(2.2·1.1)`.
+    - 공성: 철거 참가자 +1.0/구조물(원딜 slot3 +1.8/구조물 — `adcSiege` 채널과 정합), `siege.nexus` 참가자 +4.0.
+  - POG = `winner===m.a?cSide.A:cSide.B` 최댓값 슬롯. tiebreak: `kaW+tfW` → `protW` → 슬롯 순.
+  - `pogReason` = `"<ROLE> · <최대 3개 항목>"`. 항목: `${N}킬 관여`(=`kills+assists+round(Σcontrib.kill)`) / `한타 딜러 보호 ${M}회` / `오브젝트 ${K}회 확보` / `구조물 공성 ${S}회` / `넥서스 파괴 가담`, 전부 0이면 `라인·운영 주도권`. **`damage`(가상 점수)는 문자열에 미언급.**
+  - `recap[]`에 4번째 문장(POG 근거) 추가.
+  - **불변**: 승부(`rng`)·골드(`flavor`)·중계(`narr`)·전투(`crng`) 난수 스트림 호출 순서·횟수, `p`·`lead`·`advantage`·`pressure`. POG는 순수 사후 읽기.
+- `app/manager.tsx`: RECAP 카드 PoG 줄에 `{last.pogReason&&<em className="pog-why">{last.pogReason}</em>}`.
+- `app/globals.css`: `.pog-why` 규칙(1줄).
+- `tests/combat.test.mjs`: import에 `CHAMPIONS` 추가. **섹션 11 신규** — 11a(pog·pogReason 결정성), 11b(POG는 승리 팀 선수), 11c(pogReason 각 항목 숫자·태그가 원자료 독립 재집계와 일치 + 역할 접두 일치 + **POG 전투 기여 ≥ 승리 팀 중앙값**, 250시드), 11d(통제 조합 POG 슬롯 분포 — 모든 역할 >3%·한 역할 <50%, 600시드).
+- `tests/teamfight-review.mjs`: 승리 팀 POG 슬롯 분포(`pogDist`) 집계·출력.
+- 검증: 7개 스위트 PASS, tsc 0, build 0. engine.test **1055 결정적 세트 deep-equal 유지**. combat 11c 250시드 전부 이유↔사건 일치 + POG가 승리 팀 전투 기여 중앙값 이상(역할 고정 아님). combat 11d(600) / teamfight-review(4000): POG 슬롯 분포 ≈ TOP 17 / JGL 24 / MID 12 / ADC 28 / SUP 18 %(한 역할 독식 없음). teamfight-review 강화별 승률 CI·행동 지표 D017 대비 **전부 불변**(`equal` Δ승률 +0). 상세 `VALIDATION.md` 2026-09-11 단위 6 절.
 
 ## 완료한 행동/파일 (단위 5 정합성 점검, 결정 D017 · 커밋 `7167829`)
 - `lib/simulation/combat.ts` `resolveSiege`: **`behind` 게이트 3줄 삭제**(`dealtMe`/`dealtOpp`/`behind`, `budget=min(budget,1)`, `targetBase&&behind` 차단). `capacity` 그대로. `REGION_DIST`·`regionTime` **export**(D018용).
@@ -156,6 +177,10 @@ ABIL-01·COMP-01·CAST-01을 **하나의 경기 시스템**으로 완성한다. 
 - **종료** (D015): **정상 = 실제 넥서스 파괴 사건에서만**(`endReason='NEXUS'`). 상한(`endReason='CAP'`, `phase:'종료'` 사건) = 구조물 피해 > pressure > advantage > `random(hash(seed|tiebreak))`. **edgeA·마지막 사건 방향을 숨은 기본 승자로 쓰지 않음.** 9번째 사건이라는 이유로 승자 안 정함. `CLOCK_CAP=3600s / EVENT_CAP=30`.
 
 ## 아직 실패하거나 미검증인 것
+- **단위 6 리캡(step 5) 미착수**(D019): `recap[]`는 아직 전력 격차 문장 + 마지막 교전 확률 + POG 근거 1줄. 반전 beat·첫 구조물·넥서스 근거 재구성은 다음 첫 행동 A.
+- **골드 그래프 = 중계 골드 회귀 테스트 미작성**(D019): `GoldGraph`가 `e.goldA/goldB` 단일 소스임은 정적 확인만. 자동 테스트는 step 5와 함께.
+- **D019 브라우저 육안 미확인**: 이번 세션 dev 서버·브라우저 미기동. RECAP 카드 PoG 줄 `{last.pogReason}`·`.pog-why` 렌더·recap 4번째 문장은 정적(코드) 확인만.
+- **`contrib.damage`(가상 점수)는 POG total에 ×0.16 소량 반영**(D019): `pogReason` 문자열엔 미노출(체력·피해 시스템 없음 — 의도). POG 슬롯 결정에 거의 영향 없음(처치·보호가 지배).
 - **모바일 뷰포트 미확인**(D018): 이번 세션 `resize_window`는 OS 창만 줄이고 CDP 스크린샷 뷰포트는 1568px 고정 → 반응형 CSS는 정적 규칙만. **탭 비활성/복귀** 자동 일시정지도 런타임 미확인(코드에 `visibilitychange` 핸들러 존재).
 - **비교 영상 미첨부**(D018): 자동화 Chrome이 `minimap-persistent-recap-D018.gif`(5프레임, 979KB) 다운로드했으나 이 파일시스템에서 접근 불가. 변경 전 화면 = `git checkout minimap-pre-persistent` 필요(현재 코드로는 재현 불가).
 - **접근 도착 시각 ↔ 합류 판정 미통합**(D018): `showDelay`는 화면 렌더 시각만 조정, 결과 불변. `combat.participants`가 여전히 authoritative. 다음 단계(별도 체크포인트).
@@ -170,21 +195,21 @@ ABIL-01·COMP-01·CAST-01을 **하나의 경기 시스템**으로 완성한다. 
 - `powersA/powersB`는 D008에서 조합 항 제외.
 - **MINIMAP (D018 이후)**: 접근 도착 시각은 아직 합류 판정에 반영 안 됨(`showDelay`는 화면 렌더만, `combat.participants`가 authoritative). "합류 이동"(도착 지연) 세트당 ~30건은 전량 `diag`에 거리·`showDelay` 기록(순간이동·과속 아님). 모바일 뷰포트·탭 전환 육안 미확인. 비교 GIF 파일시스템 접근 불가. `top↔river` WALK 이동 비율 2.2(우회).
 
-## 다음 첫 행동 — MATCH-SYS 단위 6 (표시 데이터 통합) 또는 MINIMAP 접근↔합류 통합
-### A. MATCH-SYS 단위 6 (BACKLOG "단위 6" 절)
-BACKLOG "단위 6" 절에 6단계 상세. 요지: **POG를 실제 개인 기여로 계산**한다.
-1. `SetResult`에 슬롯별 세트 기여 집계 추가 = Σ(`combat.fight.contrib`) + 공성 참여(`combat.siege.participants`) + 오브 참여 + 갱킹 킬/어시. **재추첨·재계산 없이 합**(사건 데이터에 이미 있음).
-2. POG = 승리 팀 최댓값 슬롯. 동점은 kill 관여 → protect 성공 → 생존. 역할 고정 점수만으로 뽑지 않음. 이유 문자열을 실제 사건과 연결.
-3. `contrib.damage`는 "가상 점수" — POG 설명에 '실제 피해량'으로 안 씀(체력 시스템 없음).
-4. 골드 그래프: `SetResult.leadA` + `e.goldA/goldB`(저장됨). 중계와 다른 골드 별도 생성 금지.
-5. 리캡: 근거 사건(반전 beat·첫 구조물·넥서스)으로. 미계산 % 설명 금지.
-6. 검증: 결정성, POG 이유 = 실제 사건, 역할 편향 없음(통제 실험 슬롯별 POG 분포), 골드 그래프 = 중계 골드.
+## 다음 첫 행동 — MATCH-SYS 단위 6 step 5 (리캡 근거 사건화) 또는 MINIMAP 접근↔합류 통합
+### A. MATCH-SYS 단위 6 step 5 — 리캡을 근거 사건으로 (BACKLOG "단위 6" 절 5번)
+단위 6의 POG(step 1~3)·골드 그래프 확인(step 4)은 D019에서 끝났다. 남은 건 `recap[]`:
+1. 현재 `recap[]` = 전력 격차 2문장 + 마지막 교전 확률 1문장 + POG 근거 1문장(D019). 이걸 **흐름을 바꾼 실제 사건**으로 재구성: 반전 beat(`narration.ts` `NarrMemory`에 반전·FB 시각 있음), 첫 구조물 선취(`simulateSet` 내 `firstStructSide` — 현재 지역 변수, 필요 시 `SetResult`로 노출), 넥서스/CAP 판정(`endReason`·`capDiag`).
+2. "이 선수 덕분에 +8%" 같은 **미계산 % 설명 금지**. 준비한 계획(전술·focus) 이행 여부, 다음 세트 밴/전술 제안.
+3. 훈련 이력 콜백(실제 `trainChamp`·성과 기록이 있고 관련 행동이 나왔을 때만, 반복 방지).
+4. 검증: 결정성, 리캡 문장이 실제 사건과 일치(지어낸 수치 없음), **골드 그래프 = 중계 골드 회귀 테스트**(D019에서 미작성 — 여기서 추가). CAST-01·DRAFT-01·COMP-01 단계 3과 조율.
+주의: `GoldGraph`(step 4)는 이미 `e.goldA/goldB` 단일 소스라 **건드리지 말 것**. POG 집계(D019)도 그대로.
 
 ### B. MINIMAP: 접근 도착 ↔ 합류 판정 통합 (별도 체크포인트)
 `lib/simulation/replay.ts`는 이미 사건별 참가자 이동 도착 시각(`eta`·`showDelay`)을 계산해 `diag`/`rd.travel`에 남긴다(D018). 다음 단계는 이 도착 시각을 **합류 판정에 연결**하되, 엔진 능력치 기반 판단(`resolveObjective`의 `arriveP`, `resolveTeamfight`의 `numAdvFav`)과 **독립 확률을 두 번 적용하지 않게** 한다. 결과가 바뀌는 부분(어느 사건이 어느 참가자를 잃는가)을 명시 기록하고 combat.test/teamfight-review로 재측정. 처치·승패 계산은 combat 모듈 유지 — 이동 모듈이 별도 전투 결과를 만들지 않는다. **시각화 변경(D018, 결과 불변)과 명확히 구분해 별도 커밋.** 모바일/탭전환 브라우저 확인, 변경 전(`minimap-pre-persistent`) 대비 비교 영상도 이 단계에서.
 
 ## 재현 시드/경로
 - combat 샘플: `newGame('nva',7)` → `upgradeGame` → `g.seed=<n>` → `simulateSet(g,{a:'nva',b:'crn',...})`. `r.endReason`('NEXUS'|'CAP_TIME'|'CAP_EVENT'), `r.capDiag`(CAP일 때), `r.events[i].combat`.
+- **단위 6 POG(D019)**: `combat.test` 섹션 11 — 11c는 `simulateSet(g0,REAL)`(seed 0~249)로 `r.pog`·`r.pogReason`을 `rawTally(r.events,side,slot)` 독립 재집계와 대조. 11d/`teamfight-review.mjs 4000`은 통제 조합(`controlledBase` + 태그쌍 픽)에서 승리 팀 POG 슬롯 분포. `r.pogReason` 형식 `"<ROLE> · N킬 관여 · …"`. POG 슬롯 = `(r.winner===m.a?r.lineupA:r.lineupB).indexOf(r.pog)`.
 - **단위 5 점검(D017)**: `combat.test` 10j(구조물 열세팀 철거 회귀 — `mkState`에 `struct.A=[3,2,2]`·`baseTurrets.A=1`·B 4명 사망), 10k(공성 직전 상태 동일, 죽은 A 슬롯만 3↔0). `teamfight-review.mjs 6000` → CAP 시간/사건·tiebreak·CAP A승률·페어 b/c 출력. `balance-review.mjs`와 승률 비교 시 `m.id` 다름(서로소 모집단) 유의.
 - **미니맵 이동 정합(D018)**: `travelAudit()` = 지역쌍 엔진 초 vs WALK 초 vs 비율. `rd.travel = {k,lateJoins,farJoins,ratioMedian}`. `rd.diag[0]` = "이동 대조: TRAVEL_K=... · WALK/REGION_DIST 비율 중앙값 ... · 지연 합류 N(원거리 M)". 개별 "합류 이동(거리 Nu, T=...s +지연 Ks)". `replay.test` 섹션 10 = 대조 검사.
 - **공성/종료(단위 5)**: 통제 base(전스탯70) + `structuredClone` + `g.seed=<seed>`. `tests/teamfight-narration-examples.mjs` 실행 → NO_WINDOW/INHIB/NEXUS/CAP/TRADE 각 사례 + 재현 시드 출력. `resolveSiege` 직접 호출: `mkState`(combat.test 섹션 7) + `s.clock`·`s.struct.B`·`s.baseTurrets.B` 설정 + `s.B[sl].alive=false; respawnAt=...`(창 조절).

@@ -221,3 +221,38 @@
 - MATCH-SYS 단위 6(POG·골드 그래프·리캡 — 실제 개인 기여). BACKLOG "단위 6" 절.
 - MINIMAP: 접근 도착 시각 ↔ 합류 판정 통합(별도 체크포인트), 모바일/탭전환 브라우저 확인, 비교 영상.
 - 배포: 안 함.
+
+## 2026-09-11 — MATCH-SYS 단위 6 첫 슬라이스: POG를 실제 개인 기여로 (D019)
+
+사용자 요청: `/protocol-resume` — 현재 요청 없음 → 첫 미완료 우선 작업 한 단위. HANDOFF "다음 첫 행동 A"(MATCH-SYS 단위 6) 선택. 현재 사용자 작업본(140챔피언·mastery 배열·DraftState) 보존.
+
+### 완료한 행동/파일
+- `lib/game.ts`:
+  - `SetResult.pogReason?:string` 신규(선택 필드 — 저장 형식 불변, 구세이브 폴백).
+  - `simulateSet` 말미 POG 블록 **재작성**: 역할별 고정 가중치(`e.index`로 분기 + 슬롯 상수 배열) → **사건(combat) 원자료 슬롯별 집계**. `cSide[A|B][slot]`에 처치(+3.0)·어시(+1.4)·FB(+1.5)·라인 무처치 승리(+1.0)·오브 확보 합류(+0.7, 정글 +1.5)·한타 `fight.contrib`(kill·2.2 + engage·1.2 + damage·0.16 + survived·0.25, protect·2.42)·공성 철거 참가(+1.0/구조물, 원딜 +1.8)·넥서스 파괴 참가(+4.0). **재추첨·재계산 없음** — 승부·골드·중계 난수 미소비, `p`·`lead`·`advantage` 불변.
+  - POG = 승리 팀 최댓값 슬롯. tiebreak: 전투 기여(`kaW+tfW`) → 보호(`protW`) → 슬롯 순.
+  - `pogReason` = `"<ROLE> · N킬 관여 · 한타 딜러 보호 M회 · 오브젝트 K회 확보 · 구조물 공성 S회 · 넥서스 파괴 가담"` 중 기여 큰 순 최대 3개, 전투 기여 0이면 `"라인·운영 주도권"`. 킬 관여 수 = `kills + assists + round(Σ contrib.kill)`. `damage`(가상 점수)는 이유에 미언급.
+  - `recap[]`에 4번째 문장(POG 근거) 추가.
+- `app/manager.tsx`: RECAP 카드 PoG 줄에 `{last.pogReason}` 표시. `app/globals.css`: `.pog-why`.
+- `tests/combat.test.mjs`: **섹션 11 신규** — 11a(pog·pogReason 결정성), 11b(POG는 승리 팀 선수), 11c(pogReason 각 항목 숫자·태그가 원자료 재집계와 일치 + 역할 접두 일치 + POG 전투 기여 ≥ 승리 팀 중앙값, 250시드), 11d(통제 조합 POG 슬롯 분포 — 모든 역할 >3%·한 역할 <50%, 600시드). import에 `CHAMPIONS` 추가.
+- `tests/teamfight-review.mjs`: 승리 팀 POG 슬롯 분포(`pogDist`) 집계·출력.
+
+### 결정: D019 (코드 커밋 `3198ce2`, 문서 커밋은 이 갱신).
+
+### 검증 명령/결과
+- `node --experimental-strip-types tests/combat.test.mjs` → PASS(섹션 11 포함). 11d 출력: POG 슬롯 분포 TOP 20.5% JGL 21.8% MID 10.0% ADC 26.8% SUP 20.8%(600시드).
+- `tests/engine.test.mjs` → PASS. **1055 결정적 사용자 세트 deep-equal**(pogReason 추가 후에도 유지).
+- `ability`·`narration`·`management`·`composition`·`replay` → PASS.
+- `node node_modules/typescript/bin/tsc --noEmit --incremental false` → exit 0. `npm run build` → exit 0.
+- `node --experimental-strip-types tests/teamfight-review.mjs 4000`: POG 슬롯 분포 16.85/24.15/12.35/28.28/18.38%(한 역할 독식 없음). 강화별 승률 CI·행동 지표 D017 대비 전부 불변, `equal` Δ승률 +0(POG 변경이 결과 난수 불흔들).
+
+### 미완/미검증
+- **단위 6 step 5(리캡 근거 사건화)**: 미착수. 현재 `recap[]`은 전력 격차 문장 + POG 근거 1줄. 반전 beat·첫 구조물·넥서스 근거로 재구성은 후속.
+- **단위 6 step 4(골드 그래프)**: 변경 없음 — `GoldGraph`가 이미 `e.goldA/goldB`(엔진 사건 골드)를 reveal-gate로 그림. 정합 확인만 함.
+- **브라우저 육안 미확인**: 이번 세션 dev 서버·브라우저 미기동. RECAP PoG 줄·recap 4번째 문장 렌더는 정적 확인만.
+- `damage` 가상 점수는 total엔 소량(×0.16) 반영되지만 이유 문자열엔 미노출 — 의도(체력 시스템 없음).
+
+### 다음
+- MATCH-SYS 단위 6 step 5: 리캡을 근거 사건(반전 beat·첫 구조물·넥서스)으로. 훈련 이력 콜백. DRAFT-01·CAST-01 후속과 조율.
+- 또는 MINIMAP: 접근 도착 시각 ↔ 합류 판정 통합(별도 체크포인트).
+- 배포: 안 함.

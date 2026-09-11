@@ -352,14 +352,19 @@ export function simulateSet(g:Game,m:Match):SetResult{
  // ── POG: 실제 개인 기여 집계(단위 6) ──────────────────────────────────────────────
  // 사건 데이터(combat)에 이미 있는 처치·어시스트·한타 기여·보호·공성 참여·오브 확보만 슬롯별로 합산한다.
  // 재추첨·재계산 없음(승부·골드·중계 난수 미소비, p·lead·advantage 불변). POG = 승리 팀 최댓값 슬롯.
- type SC={total:number,kaW:number,tfW:number,protW:number,kills:number,assists:number,tfInv:number,protects:number,objSec:number,siegeS:number,nexus:boolean,laneW:number};
- const mkC=():SC=>({total:0,kaW:0,tfW:0,protW:0,kills:0,assists:0,tfInv:0,protects:0,objSec:0,siegeS:0,nexus:false,laneW:0});
+ // 처치·어시스트(kaW)는 '모든 사건 공통'으로 cb.kills에서 한 번만 센다. 한타 fight.contrib의
+ // kill/engage는 같은 처치를 다시 세므로 POG total·'킬 관여'에 넣지 않는다(D019 이중가산 수정).
+ // 한타 contrib에서 쓰는 건 비-처치 축뿐: damage(지속 압박, 가상 점수)·survived·protect(딜러 보호).
+ type SC={total:number,kaW:number,tfW:number,protW:number,kills:number,assists:number,protects:number,objSec:number,siegeS:number,nexus:boolean,laneW:number};
+ const mkC=():SC=>({total:0,kaW:0,tfW:0,protW:0,kills:0,assists:0,protects:0,objSec:0,siegeS:0,nexus:false,laneW:0});
  const cSide:Record<Side,SC[]>={A:[0,1,2,3,4].map(mkC),B:[0,1,2,3,4].map(mkC)};
  const gc=(side:Side,slot:number)=>slot>=0&&slot<5?cSide[side][slot]:null;
- const CB={KILL:3.0,ASSIST:1.4,FB:1.5,LANE:1.0,OBJ:0.7,OBJ_JGL:1.5,TF_KILL:2.2,TF_ENGAGE:1.2,TF_DMG:0.16,TF_SURV:0.25,SIEGE:1.0,SIEGE_ADC:1.8,NEXUS:4.0};
+ // TF_KB = 한타 처치 선정 가중치(갱킹 처치보다 판을 크게 흔든다). POG total에만 소액 가산 —
+ //         이유 문자열의 '킬 관여' 수(=처치+어시스트)에는 넣지 않는다(이중가산 아님).
+ const CB={KILL:3.0,ASSIST:1.4,FB:1.5,LANE:1.0,OBJ:0.7,OBJ_JGL:1.5,TF_KB:1.1,TF_DMG:0.16,TF_SURV:0.25,TF_PROT:2.4,SIEGE:1.0,SIEGE_ADC:1.8,NEXUS:4.0};
  for(const e of events){
   const cb=e.combat;if(!cb)continue;
-  for(const k of cb.kills){                       // 처치·어시스트 — 모든 사건 공통
+  for(const k of cb.kills){                       // 처치·어시스트 — 모든 사건 공통(한타·갱킹·오브 동일 가중)
    const kc=gc(k.killer.side,k.killer.slot);if(kc){kc.total+=CB.KILL;kc.kaW+=CB.KILL;kc.kills++;}
    for(const as of k.assists){const ac=gc(as.side,as.slot);if(ac){ac.total+=CB.ASSIST;ac.kaW+=CB.ASSIST;ac.assists++;}}
   }
@@ -370,11 +375,12 @@ export function simulateSet(g:Game,m:Match):SetResult{
    const sec=cb.objective!.secured;
    for(const pt of cb.participants)if(pt.side===sec){const c=gc(pt.side,pt.slot);if(c){c.total+=pt.slot===1?CB.OBJ_JGL:CB.OBJ;c.objSec++;}}
   }else if(cb.kind==='teamfight'){
-   for(const cc of cb.fight!.contrib){             // 한타 기여는 이미 사건에 슬롯별로 계산돼 있다
+   for(const cc of cb.fight!.contrib){             // 처치·어시 수는 위 cb.kills에서 셌다. 여기선 한타 처치 선정 가중(TF_KB) + 비-처치 축.
     const c=gc(cc.ref.side,cc.ref.slot);if(!c)continue;
-    const tw=cc.kill*CB.TF_KILL+cc.engage*CB.TF_ENGAGE+cc.damage*CB.TF_DMG+(cc.survived?CB.TF_SURV:0);
-    c.total+=tw;c.tfW+=tw;c.tfInv+=cc.kill;
-    if(cc.protect>0){c.total+=cc.protect*(CB.TF_KILL*1.1);c.protW+=cc.protect*(CB.TF_KILL*1.1);c.protects+=cc.protect;} // 딜러 보호 성공
+    const kb=cc.kill*CB.TF_KB;                      // cc.kill: 처치=+1·어시=+0.5 → 한타 처치·어시에 소액 선정 가중만
+    const nk=cc.damage*CB.TF_DMG+(cc.survived?CB.TF_SURV:0);
+    c.total+=kb+nk;c.tfW+=kb+nk;
+    if(cc.protect>0){c.total+=cc.protect*CB.TF_PROT;c.protW+=cc.protect*CB.TF_PROT;c.protects+=cc.protect;} // 딜러 보호 성공
    }
   }else if(cb.kind==='siege'){
    const sg=cb.siege!;
@@ -383,15 +389,25 @@ export function simulateSet(g:Game,m:Match):SetResult{
   }
  }
  const wSC=cSide[winner===m.a?'A':'B'];
+ // tiebreak: total → 전투 기여(kaW+tfW) → 보호(protW) → 선수 id 해시(역할·슬롯 무상관·결정적).
+ // 완전 동률에서 슬롯 순서(TOP 우선)로 정하지 않는다(고정 슬롯 편향 방지).
  let pogSlot=0;
  for(let s=1;s<5;s++){
   const a=wSC[s],b=wSC[pogSlot];
-  if(a.total>b.total+1e-9||(Math.abs(a.total-b.total)<=1e-9&&(a.kaW+a.tfW>b.kaW+b.tfW||(a.kaW+a.tfW===b.kaW+b.tfW&&a.protW>b.protW))))pogSlot=s;
+  if(a.total>b.total+1e-9){pogSlot=s;continue;}
+  if(a.total<b.total-1e-9)continue;
+  const ak=a.kaW+a.tfW,bk=b.kaW+b.tfW;
+  if(ak>bk+1e-9){pogSlot=s;continue;}
+  if(ak<bk-1e-9)continue;
+  if(a.protW>b.protW+1e-9){pogSlot=s;continue;}
+  if(a.protW<b.protW-1e-9)continue;
+  if(hash(ws[s].id)>hash(ws[pogSlot].id))pogSlot=s;
  }
  const pog=ws[pogSlot].id;
- // 선정 이유 = 실제 사건 원자료(가중치 역산 아님). '피해량'은 가상 점수라 언급하지 않는다(체력·피해 시스템 없음).
+ // 선정 이유 = 실제 사건 원자료(가중치 역산 아님). '킬 관여' = 처치 + 어시스트(모든 사건 동일 의미).
+ // '피해량'은 가상 점수라 언급하지 않는다(체력·피해 시스템 없음).
  const pc=wSC[pogSlot],whyPog:string[]=[];
- const kaTot=pc.kills+pc.assists+Math.round(pc.tfInv);
+ const kaTot=pc.kills+pc.assists;
  if(kaTot>0)whyPog.push(`${kaTot}킬 관여`);
  if(pc.protects>0)whyPog.push(`한타 딜러 보호 ${Math.round(pc.protects)}회`);
  if(pc.objSec>0)whyPog.push(`오브젝트 ${pc.objSec}회 확보`);

@@ -394,6 +394,11 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
  let ei=0;
  const fightUntil:Record<string,number>={};
  const arriving:Record<string,{node:string,until:number,seq:number}>={}; // 교전 노드로 이동 중인 참가자(도착 시 fight)
+ // 교전/합류가 막 풀린 참가자가 향할 다음 사건 — 이미 armed된 것만(먼 미래 사건은 그때 가서 arming 루프가
+ // 다시 계획한다). 한타 뒤 거의 항상 붙는 공성(kind 무관하게 매칭 — groupSoon은 teamfight/objective만 봄)을 놓치지 않는다.
+ const nextOwnEvent=(a:Agent)=>evInfo.find(x=>x.armed&&!x.done
+  &&x.parts.some(p=>p.side===a.side&&p.slot===a.slot)
+  &&!x.notJoined.some(n=>n.side===a.side&&n.slot===a.slot));
 
  for(let clock=0; clock<=endClock+1; clock+=DT){
   for(const a of agents) if(!a.alive && clock>=a.respawnAt){
@@ -468,10 +473,10 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
       : (sg.result==='NO_WINDOW'?`${sg.side} 공성 중단 (부활 복귀)`:sg.result==='RESET'?'양 팀 정비':`${sg.side} 공성 무산`)});
    }
    goldKeys.push({t:T(evT)+0.1,a:ev.e.goldA??goldKeys[goldKeys.length-1].a,b:ev.e.goldB??goldKeys[goldKeys.length-1].b});
-   // 사건 종료 후: 곧바로 다음 사건(엔진이 붙여 놓은 공성·연장)이 armed면 그쪽으로 재계획한다.
-   // 그래야 한타→공성 사이 좁은 시간에도 참가자가 미리 이동을 시작한다(순간이동 대신 실제 이동).
+   // 이 사건 자체엔 참가하지 않았지만(불참·다른 사유) 이미 armed된 다음 사건엔 낀 선수 — 미리 계획.
+   // (전투 중이던 참가자의 재계획은 fightUntil/arriving이 실제로 풀리는 시점에 nextOwnEvent가 담당한다 — 아래.)
    for(const r of ev.parts){ const a=ag(r);
-    if(!a.alive || fightUntil[r.side+r.slot]!==undefined || arriving[r.side+r.slot]) continue; // 아직 이 사건 교전 중 → 다음 계획은 교전 종료 후
+    if(!a.alive || fightUntil[r.side+r.slot]!==undefined || arriving[r.side+r.slot]) continue;
     const nxt=evInfo.find(x=>x.armed&&!x.done&&x.stime>=ev.stime
      &&x.parts.some(p=>p.side===r.side&&p.slot===r.slot)
      &&!x.notJoined.some(n=>n.side===r.side&&n.slot===r.slot));
@@ -512,15 +517,29 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
     delete fightUntil[kk];
     const p=posOf(a); a.fixedPos=null;
     const hn=nearestWalkNode(p);
-    // 교전 뒤엔 자기 라인/정글 쪽으로 물러난다(즉시 제자리 재집결 방지 — 연속 한타여도 소폭 이동).
-    a.route=dedupe([hn,...route(hn,homeNode(a.side,a.slot)).slice(1)]); a.seg=0; a.segT=0;
-    a.act='retreat'; a.nextDecide=clock+5;
-    emit(a,clock,'move','교전 종료 — 복귀'); continue;
+    const nxt=nextOwnEvent(a);
+    if(nxt){
+     // 이미 armed된 다음 사건(대개 한타 직후 붙는 공성)에 낀 선수 — 홈으로 물러났다 되돌아오지 않고 바로 그쪽으로.
+     a.route=dedupe([hn,...route(hn,nxt.node).slice(1)]); a.seg=0; a.segT=0;
+     a.plan={ev:nxt.idx,node:nxt.node}; a.act='group'; a.nextDecide=clock+4;
+     emit(a,clock,'move',`#${nxt.idx} 재합류`);
+    }else{
+     // 다음에 낄 사건이 없다(또는 아직 armed 전) — 자기 라인/정글 쪽으로 물러난다(즉시 제자리 재집결 방지).
+     a.route=dedupe([hn,...route(hn,homeNode(a.side,a.slot)).slice(1)]); a.seg=0; a.segT=0;
+     a.act='retreat'; a.nextDecide=clock+5;
+     emit(a,clock,'move','교전 종료 — 복귀');
+    }
+    continue;
    }
    const arr=arriving[kk];
    if(arr){
     // 합류 이동 중 — 경로 그대로 진행하다 도착(≤5u)하거나 창이 닫히면 처리.
-    if(clock>=arr.until){ delete arriving[kk]; a.act='retreat'; emit(a,clock,'move','합류 무산 — 복귀'); decide(a,clock+0.01); }
+    if(clock>=arr.until){
+     delete arriving[kk];
+     const nxt=nextOwnEvent(a);
+     if(nxt){ a.plan={ev:nxt.idx,node:nxt.node}; a.act='group'; headTo(a,nxt.node); a.nextDecide=clock+4; emit(a,clock,'move',`#${nxt.idx} 재합류`); }
+     else { a.act='retreat'; emit(a,clock,'move','합류 무산 — 복귀'); decide(a,clock+0.01); }
+    }
     else if(dist(posOf(a),WN[arr.node])<=5){
      delete arriving[kk]; a.fixedPos=WN[arr.node].slice() as Vec; a.act='fight';
      fightUntil[kk]=arr.until; emit(a,clock,'fight',`#${arr.seq} 합류·교전`); continue;

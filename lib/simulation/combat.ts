@@ -1,3 +1,5 @@
+import {travelSeconds} from './arena.ts';
+import {battlePlan} from '../balance/composition.ts';
 // 참여자 기반 전투 — ABIL-01 Phase 3 + 중계 상세 전투(같은 작업).
 //
 // 경기 스켈레톤(simulateSet의 9구간 승패 롤)은 그대로 둔다. 각 구간 "안에서" 실제 참여 선수,
@@ -18,6 +20,7 @@ export type Combatant={
  alive:boolean, respawnAt:number,          // 초
  kills:number, deaths:number, assists:number,
  gold:number,                              // 개인 자원(세트 누적, 기준 0)
+ navNode?:string, // New simulations retain an actual arena node; old fixtures use region fallback.
  region:Region, freeAt:number,             // 이동↔전투 참여 단일 계약(D022): 마지막으로 확인된 위치 ·
                                             // 그 위치에서 이동을 시작할 수 있는 시각(직전 행동이 끝난 시각).
                                             // hasArrived()가 다음 사건 참여 자격을 이 값들로만 판정한다.
@@ -32,6 +35,8 @@ export type SiegeResult='SIEGE'|'INHIB'|'NEXUS'|'NO_WINDOW'|'HELD'|'RESET';
 // 개인 기여(단위 6 POG 근거). damage는 가상 기여 점수이며 '실제 피해량'이 아니다(체력·피해 시스템 없음).
 export type Contrib={ref:Ref, kill:number, engage:number, protect:number, damage:number, survived:boolean};
 export type CombatEvent={
+ location?:string,
+ movements?:{ref:Ref,from:string,to:string,depart:number,arrive:number}[],
  seq:number, clock:number, kind:'gank'|'skirmish'|'objective'|'teamfight'|'siege',
  lane:number|null, side:Side,               // 이 사건에서 이득을 본 팀(오브: 확보 팀 / 한타: 교전 승자, 없으면 유리 팀 — 기록용 / 공성: 공격 팀)
  committed:boolean,                         // 정글 합류(갱킹)
@@ -44,10 +49,11 @@ export type CombatEvent={
  prior:number|null,                         // 이어지는 앞 사건 seq
  evidence:string[],                         // 중계가 그대로 인용할 사실
  objective?:{kind:ObjectiveKind, secured:Side|null, outcome:string}, // 오브전 전용
+ strategy?:{a:string,b:string,preparation:number,entry:number,growth:number},
  fight?:{result:TFResult, winner:Side|null, aliveA:number, aliveB:number, contrib:Contrib[]}, // 한타 전용
  siege?:{result:SiegeResult, side:Side, lane:number, from:string,          // 공성 전용
   structuresDown:number, reinforceIn:number, capacity:number,
-  structAfter:number[], baseTurretsAfter:number, nexus:boolean},
+  structAfter:number[], baseTurretsAfter:number, nexus:boolean, targetBase?:boolean},
  notJoined?:{ref:Ref,reason:string}[],      // 합류하지 못한 선수와 이유(오브·한타)
 };
 
@@ -103,8 +109,10 @@ export const regionTime=(from:Region,to:Region)=>REGION_DIST[from][to];
 // 새 확률 롤 없음(결정적 기하). freeAt(직전 행동 종료 시각) + regionTime(마지막 위치→목표) <= clock.
 // 기존 확률 기반 참가 판정(예: resolveObjective의 arriveP)과 겹치지 않는다 — 이 게이트를 통과한
 // 인원 안에서만 그 확률이 작동한다(같은 실패 확률을 두 번 적용하지 않음).
-export const hasArrived=(c:Combatant,targetRegion:Region,clock:number)=>
- c.freeAt+regionTime(c.region,targetRegion)<=clock;
+export const hasArrived=(c:Combatant,targetRegion:Region,clock:number,targetNode?:string)=>{
+ const target=targetNode??({base:c.side+'_base',top:'top_mid',mid:'mid',bot:'bot_mid',river:'dragon'}[targetRegion]);
+ return c.freeAt+(c.navNode?travelSeconds(c.navNode,target,c.slot):regionTime(c.region,targetRegion))<=clock;
+};
 const opp=(s:Side):Side=>s==='A'?'B':'A';
 // 유효 능력 = 기본 스탯 + 숙련(레벨당 +2) − 오프롤 페널티. game.ts의 OFFROLE_PEN(6)과 맞춘다.
 const eff=(c:Combatant,k:number)=>c.stats[k]+c.mastery*2-(c.off?6:0);
@@ -114,7 +122,7 @@ const RESPAWN=(clock:number)=>10+Math.min(42,clock/60*1.5); // 초, 게임 시�
 export function reviveByClock(st:MatchState,clock:number){
  for(const c of [...st.A,...st.B]) if(!c.alive && clock>=c.respawnAt){
   const at=c.respawnAt; c.alive=true; c.respawnAt=0;
-  c.region='base'; c.freeAt=at; // 사망자는 부활 후 기지에서 실제 이동을 시작한다(부활 시각부터 이동 가능).
+  c.region='base'; c.freeAt=at;if(c.navNode)c.navNode=c.side+'_base'; // 사망자는 부활 후 기지에서 실제 이동을 시작한다(부활 시각부터 이동 가능).
  }
 }
 
@@ -307,6 +315,7 @@ export function resolveObjective(
    if(!c.alive){ notJoined.push({ref:{side,slot},reason:'전투 이탈(리스폰 대기)'}); return; }
    const laneGap=c.gold-st[opp(side)][slot].gold; // + = 이 슬롯이 우세
    let arriveP:number;
+   if(!hasArrived(c,'river',clock,kind==='herald'?'baron':'dragon')){notJoined.push({ref:{side,slot},reason:'이동 중(도착 전)'});return;}
    if(slot===1) arriveP=0.99;              // 정글: 오브 주변, 거의 확정
    else if(slot===2) arriveP=0.9;           // 미드: 중앙, 대체로 합류
    else arriveP=clamp01(base+laneGap/900+(eff(c,S_TF)-55)/230);
@@ -421,7 +430,7 @@ export function resolveObjective(
 const TF_KILL_G=280, TF_ASSIST_G=125, TF_DEATH_G=200;
 
 export function resolveTeamfight(
- st:MatchState, seq:number, edgeA:boolean, margin:number, clock:number, crng:()=>number,
+ st:MatchState, seq:number, edgeA:boolean, margin:number, clock:number, crng:()=>number, targetNode=seq===5?'dragon':seq===6?'baron':'mid',
 ):CombatEvent{
  reviveByClock(st,clock);
  const favSide:Side=edgeA?'A':'B', othSide:Side=edgeA?'B':'A';
@@ -429,7 +438,7 @@ export function resolveTeamfight(
  // 도착 게이트(이동↔전투 참여 단일 계약, D022): 생존자 중 이 한타 시각까지 fightRegion에 실제로
  // 도착할 수 있는 인원만 싸운다(hasArrived — 새 확률 없음). 도착 못한 생존자는 이번 한타에 끼지
  // 않는다(소급 참여 없음) — notJoined에 남고, 다음 사건에서 자기 위치·시각 기준으로 재평가된다.
- const alive=(s:Side)=>[0,1,2,3,4].filter(sl=>st[s][sl].alive&&hasArrived(st[s][sl],fightRegion,clock));
+ const alive=(s:Side)=>[0,1,2,3,4].filter(sl=>st[s][sl].alive&&hasArrived(st[s][sl],fightRegion,clock,targetNode));
  const aA0=alive('A'), aB0=alive('B');
  const partRefs:Ref[]=[...aA0.map(sl=>({side:'A' as Side,slot:sl})),...aB0.map(sl=>({side:'B' as Side,slot:sl}))];
  const notJoined:{ref:Ref,reason:string}[]=[];
@@ -439,6 +448,7 @@ export function resolveTeamfight(
   if(!st.B[sl].alive) notJoined.push({ref:{side:'B',slot:sl},reason:'전투 이탈(리스폰 대기)'});
   else if(!aB0.includes(sl)) notJoined.push({ref:{side:'B',slot:sl},reason:'이동 중(도착 전)'});
  }
+ const plan=battlePlan(aA0.map(sl=>st.A[sl].champ),aB0.map(sl=>st.B[sl].champ),clock);
  const nFav=(favSide==='A'?aA0:aB0).length, nOth=(favSide==='A'?aB0:aA0).length;
 
  const res=[0,0,0,0,0, 0,0,0,0,0];
@@ -459,7 +469,7 @@ export function resolveTeamfight(
   if(!st.firstKillDone){ st.firstKillDone=true; firstBlood=true; }
  };
 
- const ev:string[]=[`한타 — ${favSide} ${nFav}인 vs ${othSide} ${nOth}인`];
+ const ev:string[]=[`한타 — ${favSide} ${nFav}인 vs ${othSide} ${nOth}인`,`A ${plan.a.label} / B ${plan.b.label}`];
  let result:TFResult, winner:Side|null;
 
  if(nFav===0&&nOth===0){ result='NO_SHOW'; winner=null; ev.push('양 팀 모두 인원이 없어 교전 불성립'); }
@@ -467,11 +477,11 @@ export function resolveTeamfight(
  else if(nOth===0){ result='ONE_SIDED'; winner=favSide; ev.push(`${othSide} 전원 이탈 — ${favSide}가 무혈 장악`); }
  else {
   const numAdvFav=(nFav-nOth)*0.16;                       // 실제 사망이 만든 인원차 — p에 없던 새 채널
-  const engageP=clamp01(0.93+margin*0.05);               // 대부분 교전 성립. 무교전은 팽팽한 경기의 드문 예외
+  const engageP=clamp01(0.88+margin*0.05+Math.abs(plan.entry)-Math.abs(plan.preparation)*.6);               // 대부분 교전 성립. 무교전은 팽팽한 경기의 드문 예외
   if(crng()>=engageP){ result='NO_ENGAGE'; winner=null; ev.push('양 팀 대치만 하다 물러남 — 무교전'); }
   else {
    // 승패 = margin(이미 p에 반영된 전력·자원·조합의 요약) + 실제 인원차. 작은 margin도 pressure 경쟁에서 누적된다.
-   const favWins=crng()<clamp01(0.5+margin*0.75+numAdvFav);
+   const favWins=crng()<clamp01(0.5+margin*0.75+numAdvFav+(edgeA?1:-1)*(plan.preparation+plan.entry+plan.growth));
    const decisive=margin>0.16||Math.abs(nFav-nOth)>=2;
    const wSide:Side=favWins?favSide:othSide, lSide:Side=favWins?othSide:favSide;
    const trade=margin<0.05 && Math.abs(nFav-nOth)<2 && crng()<0.25; // 킬 교환·무승부는 정말 팽팽할 때만
@@ -484,7 +494,7 @@ export function resolveTeamfight(
     const dSup=st[def][4];
     let adcSafe=false;
     if(alive(def).includes(4) && alive(def).includes(3) && alive(def).length>1 &&
-       crng()<clamp01(0.12+(eff(dSup,S_TF)+eff(dSup,S_VIS)-110)/150)){
+       crng()<clamp01(0.12+(eff(dSup,S_TF)+eff(dSup,S_VIS)-110)/150+(def==='A'?plan.protectA:plan.protectB))){
      adcSafe=true; cRec({side:def,slot:4})!.protect+=1;
      ev.push(`${dSup.player}의 보호로 ${st[def][3].player} 생존`);
     }
@@ -545,6 +555,7 @@ export function resolveTeamfight(
   committed:false,followUp:false,spotted:false,
   participants:partRefs,kills,escaped:[],noKill:kills.length===0,firstBlood,
   resource,prior:null,evidence:ev,notJoined,
+  strategy:{a:plan.a.label,b:plan.b.label,preparation:plan.preparation,entry:plan.entry,growth:plan.growth},
   fight:{result,winner,aliveA:aA0.length,aliveB:aB0.length,contrib},
  };
  st.events.push(ce);
@@ -562,20 +573,23 @@ const TOWER_G=110, INHIB_G=175, NEXUS_TURRET_G=125, NEXUS_G=220;
 export function resolveSiege(st:MatchState, seq:number, clock:number, crng:()=>number):CombatEvent{
  reviveByClock(st,clock);
  const alive=(s:Side)=>[0,1,2,3,4].filter(sl=>st[s][sl].alive);
- const aA=alive('A'), aB=alive('B');
+ const preceding=st.events.at(-1);
+ const attackReady=(s:Side)=>alive(s).filter(sl=>preceding?.kind!=='teamfight'||preceding.participants.some(p=>p.side===s&&p.slot===sl));
+ const aA=attackReady('A'), aB=attackReady('B');
  const deadGap=(s:Side)=>[0,1,2,3,4].filter(sl=>!st[s][sl].alive).map(sl=>st[s][sl].respawnAt-clock).filter(x=>x>0);
+ let siegeTargetBase=false,contactClock=clock;
  const mk=(atkSide:Side|null,result:SiegeResult,lane:number,evd:string[],res:number[],structuresDown:number,reinforceIn:number,capacity:number,nexus:boolean):CombatEvent=>{
   const resource=[0,1,2,3,4].map(sl=>res[sl]-res[5+sl]);
   const side=atkSide??'A';
   const ce:CombatEvent={
-   seq,clock,kind:'siege',lane:lane<0?null:lane,side,
+   seq,clock:contactClock,kind:'siege',lane:lane<0?null:lane,side,
    committed:false,followUp:false,spotted:false,
-   participants:atkSide?alive(atkSide).map(sl=>({side:atkSide,slot:sl})):[],
+   participants:atkSide?attackReady(atkSide).map(sl=>({side:atkSide,slot:sl})):[],
    kills:[],escaped:[],noKill:true,firstBlood:false,
    resource,prior:null,evidence:evd.length?evd:['양 팀 정비·귀환 — 구조물 변화 없음'],
    siege:{result,side,lane:lane<0?-1:lane,from:st.region[side],structuresDown,
     reinforceIn:Math.round(reinforceIn),capacity:Math.round(capacity*100)/100,
-    structAfter:[...st.struct[opp(side)]],baseTurretsAfter:st.baseTurrets[opp(side)],nexus},
+    structAfter:[...st.struct[opp(side)]],baseTurretsAfter:st.baseTurrets[opp(side)],nexus,targetBase:siegeTargetBase},
   };
   st.events.push(ce);
   return ce;
@@ -583,13 +597,13 @@ export function resolveSiege(st:MatchState, seq:number, clock:number, crng:()=>n
 
  // 공격 자격: 생존 인원이 더 많고, 상대에 리스폰 대기자가 있거나(창이 있음) 인원차 2+.
  let atkSide:Side|null=null;
- const dA=aA.length-aB.length;
+ const dA=aA.length-alive('B').length,dB=aB.length-alive('A').length;
  if(dA>=1 && (deadGap('B').length>0 || dA>=2)) atkSide='A';
- else if(-dA>=1 && (deadGap('A').length>0 || -dA>=2)) atkSide='B';
+ else if(dB>=1 && (deadGap('A').length>0 || dB>=2)) atkSide='B';
  if(!atkSide){ st.clock=clock+22; return mk(null,'RESET',-1,[],[0,0,0,0,0,0,0,0,0,0],0,0,0,false); }
 
  const defSide=opp(atkSide);
- const atk=alive(atkSide), def=alive(defSide);
+ const atk=attackReady(atkSide), def=alive(defSide);
  const gaps=deadGap(defSide);
  const reinforceIn=gaps.length?Math.min(...gaps):999;      // 수비 병력 도착까지(초)
  const s3=st.struct[defSide];
@@ -599,8 +613,11 @@ export function resolveSiege(st:MatchState, seq:number, clock:number, crng:()=>n
  let lane=-1,best=-1e9;
  for(let L=0;L<3;L++){ if(s3[L]>=3)continue; const v=s3[L]*1.0+st.lanePush[atkSide][L]*0.5+crng()*0.15; if(v>best){best=v;lane=L;} }
  const targetBase=lane<0 || (openInhib && crng()<0.62);   // 억제기 열림 → 베이스 압박 선택(라인 타워 연쇄로 넥서스까지 한 번에는 못 간다 — openInhib는 이번 사건 진입 시점 기준)
+ siegeTargetBase=targetBase;
  const laneRegion:Region=targetBase?'base':(['top','mid','bot'][lane] as Region);
- const moveTime=regionTime(st.region[atkSide],laneRegion);
+ const targetNode=targetBase?defSide+'_base':(['A','B'].includes(defSide)?({top:defSide+'_top',mid:'mid',bot:defSide+'_bot'} as Record<string,string>)[laneRegion]:'mid');
+ const moveTime=atk.some(sl=>st[atkSide!][sl].navNode)?Math.max(...atk.map(sl=>travelSeconds(st[atkSide!][sl].navNode??atkSide+'_base',targetNode,sl))):regionTime(st.region[atkSide],laneRegion);
+ contactClock=clock+moveTime;
  const windowTime=reinforceIn-moveTime;                    // 도착 후 실제 공성 가능 시간
 
  if(windowTime<=2){

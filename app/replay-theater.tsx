@@ -2,9 +2,12 @@
 import {useRef,useEffect,useState,useMemo,useCallback} from 'react';
 import {champImageUrl,champName,meta} from '@/lib/game';
 import {buildReplay,stateAt,posAt,agentsAt,MAP,type ReplayData} from '@/lib/simulation/replay';
+import {compositionPlan} from '@/lib/balance/composition';
+import {formationOffset,playbackDestination} from '@/lib/simulation/broadcast';
+import {RiftTerrain} from './rift-map';
 import {Play,Pause,SkipForward,RotateCcw,Bug} from 'lucide-react';
 
-type SetLike={events:any[],lineupA:string[],lineupB:string[],draft:{picksA:string[],picksB:string[]}};
+type SetLike={endReason?:string;events:any[],lineupA:string[],lineupB:string[],draft:{picksA:string[],picksB:string[]}};
 
 const ACT_KO:Record<string,string>={lane:'라인',jungle:'정글',roam:'로밍',group:'집결',fight:'교전',retreat:'후퇴',recall:'귀환',base:'부활',dead:'사망'};
 
@@ -34,6 +37,8 @@ export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEn
  names:{a:string[],b:string[]}, onSelectPlayer:(id:string)=>void, onEnd?:()=>void, onProgress?:(seq:number)=>void,
 }){
  const rd=useMemo<ReplayData>(()=>buildReplay(set),[set]);
+ const styles=useMemo(()=>({A:compositionPlan(set.draft.picksA).style,B:compositionPlan(set.draft.picksB).style}),[set.draft]);
+ const endedRef=useRef(false);
  const colA=meta(teamA).color||'#5b9bd5', colB=meta(teamB).color||'#e06666';
  const champ=(side:'A'|'B',slot:number)=>(side==='A'?set.draft.picksA:set.draft.picksB)[slot];
  const pid=(side:'A'|'B',slot:number)=>(side==='A'?set.lineupA:set.lineupB)[slot];
@@ -53,19 +58,16 @@ export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEn
  const lastSnapKey=useRef(''), lastTDisp=useRef(0), lastSeq=useRef(-1);
 
  const snapKey=useCallback((s:ReturnType<typeof stateAt>)=>
-  `${s.seq}|${s.score[0]}:${s.score[1]}|${Math.round(s.gold[0]/50)}:${Math.round(s.gold[1]/50)}|${s.feed.length}|${s.line}|${s.struct.A}${s.struct.B}${s.struct.baseA}${s.struct.baseB}${s.struct.nexusA}${s.struct.nexusB}`,[]);
+  `${s.completed}|${s.seq}|${s.score[0]}:${s.score[1]}|${Math.round(s.gold[0]/50)}:${Math.round(s.gold[1]/50)}|${s.feed.length}|${s.line}|${s.struct.A}${s.struct.B}${s.struct.baseA}${s.struct.baseB}${s.struct.nexusA}${s.struct.nexusB}`,[]);
 
- // 초상화 겹침 완화용 표시 보정(논리 위치와 구분): 교전·사망 클러스터에서만 소량 흩뿌림.
- const scatter=(side:'A'|'B',slot:number):[number,number]=>{
-  const i=(side==='A'?0:5)+slot, ang=i*2.399; return [Math.cos(ang)*2.4, Math.sin(ang)*2.4];
- };
+ // Role formation is a smoothly blended display offset, not a change to simulation positions.
  const paint=useCallback((t:number)=>{
   const ags=debugRef.current?agentsAt(rd,t):null;
   for(const tr of rd.tracks){
    const key=tr.side+tr.slot;
    const g=iconRefs.current[key];
    if(g){ const {pos,state}=posAt(tr,t);
-    const off=(state==='fight'||state==='dead')?scatter(tr.side,tr.slot):[0,0];
+    const off=formationOffset(tr,t,styles[tr.side]);
     g.setAttribute('transform',`translate(${pos[0]+off[0]} ${pos[1]+off[1]})`); g.setAttribute('data-state',state); }
    if(ags){
     const a=ags.find(x=>x.side===tr.side&&x.slot===tr.slot)!;
@@ -75,9 +77,9 @@ export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEn
   }
   const s=stateAt(rd,t), key=snapKey(s);
   if(key!==lastSnapKey.current){lastSnapKey.current=key;setSnap(s);}
-  if(s.seq!==lastSeq.current){lastSeq.current=s.seq;onProgress?.(s.seq);}
+  if(s.completed!==lastSeq.current){lastSeq.current=s.completed;if(!endedRef.current)onProgress?.(s.completed);}
   if(Math.abs(t-lastTDisp.current)>=0.25){lastTDisp.current=t;setTDisplay(t);}
- },[rd,snapKey,onProgress]);
+ },[rd,snapKey,onProgress,styles]);
 
  useEffect(()=>{ // rAF 재생 루프 — 프레임률이 경기 판단에 영향 없음(위치·상태 모두 t의 함수)
   lastRef.current=performance.now();
@@ -85,7 +87,7 @@ export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEn
    const dt=Math.min(0.1,(now-lastRef.current)/1000); lastRef.current=now;
    if(playingRef.current){
     tRef.current+=dt*speedRef.current;
-    if(tRef.current>=rd.duration){tRef.current=rd.duration;playingRef.current=false;setPlaying(false);onEnd?.();}
+    if(tRef.current>=rd.duration){tRef.current=rd.duration;lastTDisp.current=rd.duration;setTDisplay(rd.duration);playingRef.current=false;setPlaying(false);if(!endedRef.current){endedRef.current=true;onEnd?.();}}
    }
    paint(tRef.current);
    rafRef.current=requestAnimationFrame(loop);
@@ -102,11 +104,17 @@ export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEn
   return ()=>document.removeEventListener('visibilitychange',onVis);
  },[]);
 
- const toggle=()=>{const n=!playingRef.current;playingRef.current=n;setPlaying(n);lastRef.current=performance.now();};
+ const toggle=()=>{if(tRef.current>=rd.duration){restart();return;}const n=!playingRef.current;playingRef.current=n;setPlaying(n);lastRef.current=performance.now();};
  const setSpd=(v:number)=>{speedRef.current=v;setSpeed(v);};
- const seek=(t:number)=>{tRef.current=Math.max(0,Math.min(rd.duration,t));lastSnapKey.current='';paint(tRef.current);};
+ const seek=(t:number)=>{
+  const dst=playbackDestination(t,rd.duration,endedRef.current);
+  // Rewind clears terminal state before paint so completed-count changes reach the parent.
+  endedRef.current=dst.ended;tRef.current=dst.time;lastTDisp.current=dst.time;setTDisplay(dst.time);
+  lastSnapKey.current='';lastSeq.current=-1;paint(dst.time);
+  if(dst.ended){playingRef.current=false;setPlaying(false);if(dst.notifyEnd)onEnd?.();}
+ };
  const nextEvent=()=>{const w=rd.windows.find(w=>w.start>tRef.current+0.05);seek(w?w.start:rd.duration);};
- const restart=()=>{tRef.current=0;playingRef.current=true;setPlaying(true);lastRef.current=performance.now();lastSnapKey.current='';paint(0);};
+ const restart=()=>{endedRef.current=false;lastTDisp.current=0;setTDisplay(0);tRef.current=0;playingRef.current=true;setPlaying(true);lastRef.current=performance.now();lastSnapKey.current='';paint(0);};
 
  // 통로(WALK) — 디버그에서 보행 가능 영역
  const navLines=useMemo(()=>rd.nav.segs.map((s,i)=><line key={i} x1={s[0][0]} y1={s[0][1]} x2={s[1][0]} y2={s[1][1]} className="rt-nav"/>),[rd]);
@@ -140,7 +148,7 @@ export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEn
   const cid=champ(side,slot), key=side+slot, isDead=!!dead[side+' '+slot];
   const abbr=(champName(cid)||'').slice(0,2);
   return <g key={key} ref={el=>{iconRefs.current[key]=el;}} className={`rt-icon rt-${side}${isDead?' rt-dead':''}`}
-    onClick={()=>onSelectPlayer(pid(side,slot))} role="button" tabIndex={0}
+    onClick={()=>onSelectPlayer(pid(side,slot))} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();onSelectPlayer(pid(side,slot));}}} role="button" tabIndex={0}
     aria-label={`${pname(side,slot)} · ${champName(cid)}`}>
    <circle r={3.4} className="rt-ring" style={{stroke:side==='A'?colA:colB}}/>
    <text className="rt-abbr" textAnchor="middle" dy="1.05">{abbr}</text>
@@ -157,16 +165,11 @@ export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEn
    <span className="rt-team right"><b>{snap.score[1]}</b>{meta(teamB).short}</span>
    <span className="rt-gold">골드 {(snap.gold[mineIsA?0:1]/1000).toFixed(1)}k <em>vs</em> {(snap.gold[mineIsA?1:0]/1000).toFixed(1)}k</span>
   </div>
-  <div className="rt-stage">
+  <div className="rt-plans"><span>{meta(teamA).short} · {compositionPlan(set.draft.picksA).label}</span><span>{meta(teamB).short} · {compositionPlan(set.draft.picksB).label}</span></div><div className="rt-stage">
    <svg viewBox="0 0 100 100" className={`rt-map${debug?' rt-debug':''}`} preserveAspectRatio="xMidYMid meet">
     <defs><clipPath id="rtclip"><circle cx="0" cy="0" r="3"/></clipPath></defs>
-    <rect x="0" y="0" width="100" height="100" className="rt-bg"/>
-    <polygon points="0,100 100,100 100,0" className="rt-halfB"/>
-    <line x1="0" y1="100" x2="100" y2="0" className="rt-river"/>
-    <g className="rt-corridors">{edgeLines}</g>
+    <RiftTerrain/>
     {debug&&<g className="rt-navlayer">{navLines}</g>}
-    <rect x={MAP.nodes.A_base[0]-6} y={MAP.nodes.A_base[1]-6} width="12" height="12" className="rt-base" style={{fill:colA}}/>
-    <rect x={MAP.nodes.B_base[0]-6} y={MAP.nodes.B_base[1]-6} width="12" height="12" className="rt-base" style={{fill:colB}}/>
     <circle cx={MAP.nodes.baron[0]} cy={MAP.nodes.baron[1]} r="3.4" className="rt-obj"/><text x={MAP.nodes.baron[0]} y={MAP.nodes.baron[1]-4.5} className="rt-objlabel" textAnchor="middle">전령/바론</text>
     <circle cx={MAP.nodes.dragon[0]} cy={MAP.nodes.dragon[1]} r="3.4" className="rt-obj"/><text x={MAP.nodes.dragon[0]} y={MAP.nodes.dragon[1]+6.5} className="rt-objlabel" textAnchor="middle">드래곤</text>
     <g className="rt-structs">{structLayer}</g>
@@ -179,7 +182,7 @@ export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEn
    <div className="rt-side">
     {(() => {
      const st=snap.struct, dmgA=st.B.reduce((x,y)=>x+y,0)+(2-st.baseB)*2, dmgB=st.A.reduce((x,y)=>x+y,0)+(2-st.baseA)*2;
-     const lbl=(arr:number[],base:number,nex:boolean)=>nex?'넥서스 파괴':`${arr.filter(v=>v>=3).length}억제 · 포탑 ${9-arr.reduce((x,y)=>x+y,0)}/9${base<2?` · 넥서스포탑 ${base}/2`:''}`;
+     const lbl=(arr:number[],base:number,nex:boolean)=>nex?'넥서스 파괴':`${arr.filter(v=>v>=3).length}억제 · 포탑 ${6-arr.reduce((x,y)=>x+Math.min(2,y),0)}/6${base<2?` · 넥서스포탑 ${base}/2`:''}`;
      if(dmgA===0&&dmgB===0)return null;
      return <div className="rt-struct">
       <span style={{color:colA}}>{meta(teamA).short}</span> {lbl(st.A,st.baseA,st.nexusA)}
@@ -187,9 +190,15 @@ export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEn
       <span style={{color:colB}}>{meta(teamB).short}</span> {lbl(st.B,st.baseB,st.nexusB)}
      </div>;
     })()}
-    <div className="rt-nowline">{snap.line||'경기 시작'}</div>
+    <div className="rt-view-label">관전자 시점 · 경기 사건 재생</div><div className="rt-nowline">{tDisplay>=rd.duration&&set.endReason?.startsWith('CAP_')?'제한 시간 또는 사건 수 도달 · 넥서스 미파괴, 경기 결과에서 판정 근거를 확인하세요.':snap.line||'경기 시작'}</div>
+    <div className="rt-lineups" aria-label="현재 선수 기록">
+     {(['A','B'] as const).map(side=><div key={side}><b style={{color:side==='A'?colA:colB}}>{meta(side==='A'?teamA:teamB).short}</b>
+      {[0,1,2,3,4].map(slot=>{const kd=snap.kda[side+slot],tr=rd.tracks.find(x=>x.side===side&&x.slot===slot)!;const state=posAt(tr,tDisplay);return <button key={slot} onClick={()=>onSelectPlayer(pid(side,slot))} className={state.state==='dead'?'fallen':''}>
+       <span>{['TOP','JGL','MID','ADC','SUP'][slot]}</span><strong>{champName(champ(side,slot))}<small>{pname(side,slot)}</small></strong><span>{kd.kills}/{kd.deaths}/{kd.assists}<small>{ACT_KO[state.act??'lane']}</small></span>
+      </button>;})}</div>)}
+    </div>
     <ul className="rt-feed">{snap.feed.slice().reverse().map((f,i)=><li key={i} className={`rt-fd${f.text==='FIRST BLOOD'?' fb':''}`}>
-     <span className="rt-fd-t">{f.by||f.ref?`${f.by?pn(f.by,names):''}${f.by&&f.ref?' → ':''}${f.ref?pn(f.ref,names):''}`:''}</span>
+     <span className="rt-fd-t">{f.by||f.ref?`${f.by?`${pn(f.by,names)}(${champName(champ(f.by.side,f.by.slot))})`:''}${f.by&&f.ref?' → ':''}${f.ref?`${pn(f.ref,names)}(${champName(champ(f.ref.side,f.ref.slot))})`:''}`:''}</span>
      <span>{f.text}</span>
     </li>)}</ul>
     {debug&&<div className="rt-diag">
@@ -199,13 +208,14 @@ export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEn
     </div>}
    </div>
   </div>
+  <div className="rt-history" aria-label="완료된 경기 사건">{rd.windows.filter(w=>w.end<=tDisplay).map(w=><button key={w.seq} onClick={()=>seek(w.start)}>{mm(w.engineClock)} · {w.label}</button>)}</div>
   <div className="rt-controls">
    <button onClick={toggle} aria-label={playing?'일시정지':'재생'}>{playing?<Pause size={15}/>:<Play size={15}/>}</button>
    <button onClick={()=>setSpd(speed===1?2:speed===2?4:1)} className={speed>1?'on':''}>{speed}×</button>
    <button onClick={nextEvent} aria-label="다음 사건"><SkipForward size={15}/></button>
    <input type="range" min={0} max={rd.duration} step={0.1} value={Math.min(tDisplay,rd.duration)}
      onChange={e=>seek(Number(e.target.value))} aria-label="재생 위치"/>
-   <span className="rt-time">{mm(tDisplay*rd.scale)} <small>게임 · {speed}×</small></span>
+   <span className="rt-time">{mm(snap.gameClock)} <small>게임 · {speed}×</small></span>
    <button onClick={restart} aria-label="처음부터"><RotateCcw size={14}/></button>
    <button onClick={()=>setDebug(d=>!d)} className={debug?'on':''} aria-label="디버그"><Bug size={14}/></button>
    {hidden&&<span className="rt-paused">탭 비활성 — 일시정지됨</span>}

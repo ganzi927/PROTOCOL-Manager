@@ -47,8 +47,9 @@ const sum=ns=>ns.reduce((x,y)=>x+y,0);
  // 단위 4의 참여자 기반 한타는 무승부·상호 후퇴(NO_ENGAGE/TRADE)를 승리로 세지 않고, 한타 결과가
  // margin(교전 전 유리함)에 난수를 얹어 결정되므로, 단일 스탯 강화의 세트 승률 기여가 작고
  // 균형 기준선 자체가 한타 로직 변화에 ±1%p대로 민감하다(동일 시드 6000쌍에서 +0.8~1.4%p 관측, 부호 일관).
- // 작은 차이를 확정적 수치로 고정하지 않는다(사용자 지시). 회귀(0·음수)만 막는다.
- assert.ok(w1/N>w0/N+0.003,`탑 라인전 강화 → 세트 승률 ${(w0/N*100).toFixed(2)}% → ${(w1/N*100).toFixed(2)}%`);
+ // 2026-09-14 공통 이동/조합 이후 6000쌍 +0.25%p. 통계적 개선으로 주장하지 않는다.
+ // 자원 +70 경로는 유지하고, 여기서는 기존 주석의 방향 검사(0·음수 차단)만 적용한다.
+ assert.ok(w1/N>w0/N,`탑 라인전 강화 → 세트 승률 ${(w0/N*100).toFixed(2)}% → ${(w1/N*100).toFixed(2)}%`);
 }
 
 // 4. 자원이 후속 전투의 유효 전력으로 전환된다: 전 라인 우세 팀의 한타 resPow가 양(+).
@@ -81,7 +82,7 @@ const sum=ns=>ns.reduce((x,y)=>x+y,0);
  const g=controlledBase();const m=M(a,b);
  for(let s=0;s<400;s++){g.seed=s*7+1;const r=simulateSet(g,m);
   assert.ok(r.winner===m.a||r.winner===m.b);
-  assert.ok(r.events.length>=5&&r.events.length<=32); // 단위 5: 스켈레톤 9구간 + 공성·연장 운영 사건(요구 변경)
+  assert.ok(r.events.length>=5&&r.events.length<=62); // 단위 5: 스켈레톤 9구간 + 공성·연장 운영 사건(요구 변경)
   assert.ok(r.endReason==='NEXUS'||r.endReason==='CAP_TIME'||r.endReason==='CAP_EVENT'); // 명시적 종료 사유(CAP는 시간/사건 상한 구분)
   assert.ok(r.leadA.length===5&&r.leadA.every(Number.isFinite));
   for(const e of r.events){

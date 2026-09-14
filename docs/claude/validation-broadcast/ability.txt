@@ -1,0 +1,1 @@
+PASS ability: determinism, symmetric no-bias, lane→resource→set-win, resource→combat conversion, CAR gating, bounds

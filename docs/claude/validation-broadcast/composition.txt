@@ -1,0 +1,1 @@
+PASS composition: profile derivation, pure antisymmetry, matchup direction, engine segment sensitivity, single-path determinism

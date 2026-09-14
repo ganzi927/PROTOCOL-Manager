@@ -59,18 +59,21 @@ const EVENT_MIN=[2.4,5,7.4,11,15,20.5,26.5,32.5,38];
 export function narrateEvent(c:NarrCtx,mem:NarrMemory,rng:()=>number):NarrateResult{
  const {i,wa}=c;
  // 이 사건의 절정 시각(초). 단조 증가.
- const climax=Math.max(mem.sec+35,Math.round(((EVENT_MIN[i]??(EVENT_MIN[8]+(i-8)*2.2))+rng()*1.6)*60));
+ const previous=mem.sec;
+ const climax=c.combat?Math.max(previous,c.combat.clock):Math.max(previous+35,Math.round(((EVENT_MIN[i]??(EVENT_MIN[8]+(i-8)*2.2))+rng()*1.6)*60));
  mem.sec=climax;
  const wShort=wa?c.aShort:c.bShort, lShort=wa?c.bShort:c.aShort;
  const wCh=wa?c.aChamp:c.bChamp, lCh=wa?c.bChamp:c.aChamp;
  const wPl=wa?c.aPlayer:c.bPlayer;
  const dom=Math.abs(c.p-0.5);
  const beats:Beat[]=[];
- const at=(back:number,label:string,text:string)=>beats.push({t:fmt(climax-back),label,text});
+ const at=(back:number,label:string,text:string)=>beats.push({t:fmt(Math.max(previous,climax-back)),label,text});
  let kills={a:0,b:0};
 
  const done=(detail:string,tier:Tier,note?:string):NarrateResult=>{
   if(note)beats.push({t:fmt(climax+4),label:'해설',text:note});
+  beats.sort((a,b)=>a.t.localeCompare(b.t));
+  if(note)mem.sec=Math.max(mem.sec,climax+4);
   return {detail,beats,tier,kills};
  };
 
@@ -79,7 +82,7 @@ export function narrateEvent(c:NarrCtx,mem:NarrMemory,rng:()=>number):NarrateRes
  if(c.combat&&c.combat.kind==='siege'){
   const sg=c.combat.siege!;
   const atkShort=sg.side==='A'?c.aShort:c.bShort, defShort=sg.side==='A'?c.bShort:c.aShort;
-  const laneKor=['탑','미드','바텀'][sg.lane]??'베이스';
+  const laneKor=sg.targetBase||sg.nexus?'상대 기지':(['탑','미드','바텀'][sg.lane]??'베이스');
   at(20,'공성', sg.result==='RESET'
    ? `${c.aShort}·${c.bShort} 모두 정비·귀환. 구조물은 그대로입니다.`
    : sg.result==='NO_WINDOW'
@@ -284,13 +287,20 @@ export function narrateEvent(c:NarrCtx,mem:NarrMemory,rng:()=>number):NarrateRes
   const ka=cb.kills.filter(k=>k.killer.side==='A').length, kb=cb.kills.filter(k=>k.killer.side==='B').length;
   mem.teamKills.a+=ka; mem.teamKills.b+=kb; kills={a:ka,b:kb};
   const nA=fr.aliveA, nB=fr.aliveB, even=nA===5&&nB===5;
+  const sp=cb.strategy;
+  if(sp){
+   at(26,'조합 운영',`${c.aShort} ${sp.a} 대 ${c.bShort} ${sp.b}.`);
+   if(Math.abs(sp.preparation)>.025) at(23,'사전 견제',`${sp.preparation>0?c.aShort:c.bShort}의 원거리 압박이 상대의 접근 부담을 높입니다.`);
+   if(Math.abs(sp.entry)>.025) at(18,'진형',`${sp.entry>0?c.aShort:c.bShort}가 진입과 받아치기 구도에서 유리한 조건을 만듭니다.`);
+   if(Math.abs(sp.growth)>.025) at(16,'성장',`${sp.growth>0?c.aShort:c.bShort} 조합이 현재 경기 시간의 성장 구간에서 힘을 받습니다.`);
+  }
+
   const initiator=[...fr.contrib].sort((x,y)=>y.engage-x.engage)[0];
   const protector=fr.contrib.find(x=>x.protect>0);
 
   // 왜 / 인원
-  at(30,'한타', even
-   ? pick(rng,[`${pick(rng,FIGHT_PLACE)} 앞에서 양 팀 5인이 진형을 잡습니다.`,`${wShort}가 오브젝트를 압박하며 상대를 끌어냅니다.`])
-   : `${pick(rng,FIGHT_PLACE)} 앞 교전 — ${c.aShort} ${nA}인, ${c.bShort} ${nB}인. 인원이 맞지 않습니다.`);
+  const location=cb.location==='A_mid'?`${c.aShort} 기지 앞 미드`:cb.location==='B_mid'?`${c.bShort} 기지 앞 미드`:cb.seq===5?'드래곤 쪽 강':cb.seq===6?'상단 강':'미드';
+  at(30,'한타',`${location}에서 ${c.aShort} ${nA}인과 ${c.bShort} ${nB}인이 진형을 잡습니다.${even?'':' 합류 인원을 확인해야 합니다.'}`);
   // D022: notJoined 사유가 사망(부활 대기)뿐 아니라 도착 게이트(이동 중)도 있을 수 있어 실제 사유를 그대로 쓴다.
   const late=(cb.notJoined||[]).slice(0,2);
   if(late.length)at(20,'공백', `${late.map(n=>`${nm(n.ref)}(${n.reason.includes('리스폰')?'부활 대기':'도착 전'})`).join(', ')} — 이번 한타에 빠집니다.`);

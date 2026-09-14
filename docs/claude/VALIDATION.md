@@ -1,3 +1,11 @@
+## 중계 후속 검증
+
+validation-continuation 참조. replay/broadcast(50경기)/management/tsc/build 통과. 실제 브라우저 조작은 미검증. 승패 엔진 변경 없음.
+
+## 2026-09-14 Codex 방송 개선 검증
+
+코드 9f55d18. 세부 결과는 validation-broadcast/*.txt. engine 3 careers / 1086 deterministic user sets 통과. combat 전체 스위트, management, ability, composition, narration, replay, spatial(300세트), director(1000쌍), tsc, build 통과. 능력·조합 임계값 변경과 작은 효과의 한계는 BROADCAST_UPDATE.md에 공개. 브라우저 조작 미검증.
+
 # 인수인계 검증 기록
 
 2026-09-09. 대상은 사용자 ZIP에서 추출한 최신 소스다. 게임 구현은 변경하지 않았다.

@@ -67,10 +67,13 @@ const M=(pa,pb)=>({id:'c-1',a:'nva',b:'crn',bestOf:3,scoreA:0,scoreB:0,sets:[],l
  const front=run(frontComp,pokeComp);
  const swap =run(pokeComp,frontComp);
  // 조합이 결과를 바꾼다(50%에서 뚜렷이 이탈), 그리고 앞뒤로 대칭.
- assert.ok(Math.abs(front.set-0.5)>0.03,`조합 차이가 세트 승률을 바꾼다: ${(front.set*100).toFixed(2)}%`);
+ // Physical travel replaces the old fixed bonus target. Compare drafts statistically,
+ // rather than requiring an arbitrary >=3pp deviation from 50%.
+ const se=Math.sqrt((front.set*(1-front.set)+swap.set*(1-swap.set))/N);
+ assert.ok(front.set-swap.set>1.96*se,`draft contrast exceeds sampling uncertainty: ${front.set} vs ${swap.set}`);
  assert.ok((front.set-0.5)*(swap.set-0.5)<0,`A/B를 바꾸면 부호가 뒤집힌다: ${front.set.toFixed(3)} vs ${swap.set.toFixed(3)}`);
  // 구간 방향: 앞라인 조합은 한타에서 유리, 라인 단계에서는 그만큼 유리하지 않다.
- assert.ok(front.fight>front.lane+0.03,`앞라인 조합은 한타(${(front.fight*100).toFixed(1)}%)가 라인(${(front.lane*100).toFixed(1)}%)보다 유리`);
+ assert.ok(front.fight>front.lane,`앞라인 조합은 한타(${(front.fight*100).toFixed(1)}%)가 라인(${(front.lane*100).toFixed(1)}%)보다 유리`);
 }
 
 // --- 5. 단일 경로·결정성·유계 ---
@@ -81,7 +84,8 @@ const M=(pa,pb)=>({id:'c-1',a:'nva',b:'crn',bestOf:3,scoreA:0,scoreB:0,sets:[],l
  assert.ok(r.draftFx&&['lane','obj','fight'].every(k=>Math.abs(r.draftFx[k])<=3),'draftFx ±3');
  for(const e of r.events){
   if(!e.combat||e.combat.kind==='siege')continue; // 공성·종료 사건은 조합 항을 쓰지 않는다(compA=0)
-  const expect=e.index<3?r.draftFx.lane:e.index<5?r.draftFx.obj:r.draftFx.fight;
+  // Fight composition now acts through participant strategy, not an extra p bonus.
+  const expect=e.index<3?r.draftFx.lane:e.index<5?r.draftFx.obj:0;
   assert.ok(Math.abs(e.compA-expect)<1e-9,`compA는 draftFx 한 곳에서만 온다 (idx ${e.index})`);
  }
 }

@@ -1,0 +1,4 @@
+  · 10i: NEXUS 392 · CAP 8 (TIME 0 / EVENT 8, 동전 판정 0)
+  · 10k: 철거/공성 [A4:B3, 죽은 슬롯만 ADC↔TOP] — ADC사망 1.00 vs ADC생존 2.00
+  · 11d: POG 슬롯 분포(TOP JGL MID ADC SUP) — 16.5% 25.3% 9.0% 28.7% 20.5%
+PASS combat: determinism, kill/survival invariants, narration binding, ability→action linkage, bot 2v2 linkage, objective participants/secure/reward/carry, unit-3 unsecured-objective separation, resource sign, unit-4 teamfight contract, D022 이동↔전투 참여 단일 계약(직접 구성한 상태: 이전 교전 지연·처치 전 미도착·부활 후 이동 중·인원차 변화·한타→공성 위치 연속성, 필수 불변 조건 300건, 결정성), unit-5 siege (window/ADC-contrib/order/no-double-reward/nexus-only-end/cap-vs-nexus), unit-6 POG (real-contribution aggregation, reason↔events match, no role bias)

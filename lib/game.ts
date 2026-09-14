@@ -1,6 +1,7 @@
+import {travelSeconds} from './simulation/arena.ts';
 import {CHAMPIONS, TAG_LABEL, champImageUrl, type Champion, type ChampTag, type ChampType} from './champions.ts';
 import {TEAM_META, FOREIGN_META, TEAM_LOGO, LCK_ROSTER, INTL_ROSTER} from './rosters.ts';
-import {draftEffects} from './balance/composition.ts';
+import {draftEffects,compositionPlan,draftFitScore} from './balance/composition.ts';
 import {narrateEvent, newNarrMemory, type Beat, type Tier} from './simulation/narration.ts';
 import {newMatchState, resolveGank, resolveBotLane, resolveObjective, resolveTeamfight, resolveSiege, type CombatEvent, type Side} from './simulation/combat.ts';
 export {CHAMPIONS, TAG_LABEL, champImageUrl, TEAM_META, FOREIGN_META, TEAM_LOGO};
@@ -164,12 +165,15 @@ function aiPick(g:Game,m:Match,ds:DraftState):string{
  let best='',bestScore=-Infinity;
  for(const c of cands){
   const meta=metaSet.has(c.id)?3:0;let s:number;
-  if(kind==='BAN')s=rate(opp,c.id)*2+meta;
+  if(kind==='BAN'){
+   const enemy=draftPicksOf(ds,oppId).map(p=>p.champ), own=draftPicksOf(ds,teamId).map(p=>p.champ);
+   s=rate(opp,c.id)*2+meta+draftFitScore([...enemy,c.id],own)*1.5;
+  }
   else{
    const fitRole=open.includes(c.role)?c.role:c.flex.find(f=>open.includes(f))??open[0]??c.role;
    const fit=!open.length?0:open.includes(c.role)?4:c.flex.some(f=>open.includes(f))?1.5:-5;
    const player=mine[ROLES.indexOf(fitRole)];
-   s=fit+(player?masteryLevel(player,c.id)*2:0)+(t.tactic==='early'&&c.tags.includes('engage')?2:t.tactic==='late'&&c.tags.includes('scale')?2:0)+meta;
+   s=draftFitScore([...draftPicksOf(ds,teamId).map(p=>p.champ),c.id],draftPicksOf(ds,oppId).map(p=>p.champ))*1.5+fit+(player?masteryLevel(player,c.id)*2:0)+(t.tactic==='early'&&c.tags.includes('engage')?2:t.tactic==='late'&&c.tags.includes('scale')?2:0)+meta;
   }
   s+=rng()*noise;
   if(s>bestScore){bestScore=s;best=c.id;}
@@ -233,6 +237,32 @@ export function simulateSet(g:Game,m:Match):SetResult{
   (side,slot)=>masteryLevel(side==='A'?sa[slot]:sb[slot],(side==='A'?draft.picksA:draft.picksB)[slot]),
   (side,slot)=>roleFit((side==='A'?draft.picksA:draft.picksB)[slot],ROLES[slot])==='off',
  );
+ // A node is carried across events; it is never reset to the river after a siege.
+ for(const side of ['A','B'] as Side[])for(const c of cs[side])c.navNode=side+'_base';
+ const withMovement=(resolve:()=>CombatEvent,node?:string)=>{
+  const before=new Map([...cs.A,...cs.B].map(c=>[c.side+c.slot,{node:c.alive?c.navNode!:c.side+'_base',free:c.alive?c.freeAt:Math.max(c.freeAt,c.respawnAt)}]));
+  const cb=resolve();
+  const sg=cb.siege,def=cb.side==='A'?'B':'A';
+  const target=node??(sg?.targetBase||sg?.nexus?def+'_base':sg&&sg.lane>=0?[def+'_top','mid',def+'_bot'][sg.lane]:'mid');
+  cb.location=target;
+  cb.movements=cb.participants.map(ref=>{
+   const source=before.get(ref.side+ref.slot)!,c=cs[ref.side][ref.slot];
+   const from=c.navNode===ref.side+'_base'&&source.node!==c.navNode?c.navNode:source.node;
+   const travel=travelSeconds(from,target,ref.slot),depart=Math.max(source.free,cb.clock-travel);
+   c.navNode=target;
+   if(c.alive)c.freeAt=Math.max(cb.clock+14,cs.clock-(sg?12:0));
+   return {ref,from,to:target,depart,arrive:depart+travel};
+  });
+  return cb;
+ };
+ const battlefield=(seq:number)=>{
+  if(seq===5)return 'dragon';if(seq===6)return 'baron';
+  const damageA=cs.struct.B.reduce((a,b)=>a+b,0),damageB=cs.struct.A.reduce((a,b)=>a+b,0);
+  // An opened inhibitor moves the front toward the exposed base, shortening a real siege route.
+  if(cs.struct.B.some(v=>v>=3)&&damageA>damageB)return 'B_mid';
+  if(cs.struct.A.some(v=>v>=3)&&damageB>damageA)return 'A_mid';
+  return 'mid';
+ };
  const wVis=(ps:Player[])=>ps.reduce((v,p,k)=>v+p.stats[3]*RES_VIS_W[k],0)/RES_VIS_W.reduce((x,y)=>x+y,0);
  const wCar=(ps:Player[])=>ps.reduce((v,p,k)=>v+p.stats[5]*RES_CAR_W[k],0);
  const convA=1+clamp((wCar(sa)-50)/130,-0.3,0.5),convB=1+clamp((wCar(sb)-50)/130,-0.3,0.5);
@@ -240,7 +270,7 @@ export function simulateSet(g:Game,m:Match):SetResult{
  const lead=[0,0,0,0,0]; // 슬롯별 자원(+ = A 우세)
  let advantage=0,pressureA=0,pressureB=0,winner='',laneResults:number[]=[];const events:GameEvent[]=[];
  const labels=['탑 라인전','미드 라인전','바텀 라인전','전령 교전','드래곤 교전','중반 교전','후반 교전','마지막 진격','기지 결전'];
- const CLOCK_CAP=3600, EVENT_CAP=30;      // 무한 실행 방지 상한(경기 시계 초 / 사건 수). 도달은 정상 넥서스 승리와 구분해 기록.
+ const CLOCK_CAP=3600, EVENT_CAP=60;      // 무한 실행 방지 상한(경기 시계 초 / 사건 수). 도달은 정상 넥서스 승리와 구분해 기록.
  let ei=0;                               // GameEvent.index (스켈레톤 0..8, 이후 공성·연장 사건이 이어 붙는다)
  let endReason:'NEXUS'|'CAP_TIME'|'CAP_EVENT'='CAP_EVENT';
  let capDiag:CapDiag|undefined;
@@ -251,7 +281,7 @@ export function simulateSet(g:Game,m:Match):SetResult{
   const teamLead=lead[0]+lead[1]+lead[2]+lead[3]+lead[4];
   const effLead=clamp(Math.sign(teamLead)*Math.max(0,Math.abs(teamLead)-RES_DEAD),-RES_CAP,RES_CAP);
   const resPow=(phase<3?0:phase<4?RES_OBJ:RES_FIGHT)*Math.tanh(effLead/RES_SCALE)*(teamLead>=0?convA:convB);
-  const comp=phase<3?de.lane:phase<4?de.obj:de.fight;
+  const comp=phase<3?de.lane:phase<4?de.obj:0;
   const p=clamp(1/(1+10**(-(pa[phase]-pb[phase]+RES_ADV_K*advantage+access+resPow+comp)/30)),.05,.95);
   return {p,resPow,comp,phase,edgeA:rng()<p,margin:clamp(Math.abs(p-0.5)*2.2,0,1)};
  };
@@ -270,7 +300,7 @@ export function simulateSet(g:Game,m:Match):SetResult{
  };
  // 한타 후속 공성. 구조물 골드는 resource로 lead에 1회만 반영(단일 경로). 넥서스 파괴면 true.
  const doSiege=(idx:number)=>{
-  const se=resolveSiege(cs,idx,cs.clock,crng), sg=se.siege!;
+  const se=withMovement(()=>resolveSiege(cs,idx,cs.clock,crng)), sg=se.siege!;
   for(let s=0;s<5;s++)lead[s]+=se.resource[s];
   if(sg.structuresDown>0&&!firstStructSide)firstStructSide=sg.side;
   const atkA=sg.side==='A';
@@ -288,12 +318,12 @@ export function simulateSet(g:Game,m:Match):SetResult{
   const r=rollFight(phase,access);
   let cb:CombatEvent, waIn=r.edgeA;
   if(i<3){
-   cb=i<2?resolveGank(cs,i,i as 0|1,r.edgeA,r.margin,[150,306][i],crng):resolveBotLane(cs,i,r.edgeA,r.margin,498,crng);
+   cb=withMovement(()=>i<2?resolveGank(cs,i,i as 0|1,r.edgeA,r.margin,[150,306][i],crng):resolveBotLane(cs,i,r.edgeA,r.margin,498,crng),['top_mid','mid','bot_mid'][i]);
    cs.clock=[150,306,498][i];
    for(let s=0;s<5;s++)lead[s]+=cb.resource[s];
    if(i===2)for(let s=0;s<5;s++)lead[s]+=visEdge*RES_VIS_PROTECT;
   }else if(i<5){
-   cb=resolveObjective(cs,i,i===3?'herald':'dragon',r.edgeA,r.margin,i===3?660:900,crng);
+   cb=withMovement(()=>resolveObjective(cs,i,i===3?'herald':'dragon',r.edgeA,r.margin,i===3?660:900,crng),i===3?'baron':'dragon');
    cs.clock=i===3?660:900;
    for(let s=0;s<5;s++)lead[s]+=cb.resource[s];
    const sec=cb.objective!.secured;
@@ -301,7 +331,8 @@ export function simulateSet(g:Game,m:Match):SetResult{
    if(sec){const L=i===3?0:2;cs.lanePush[sec][L]=Math.min(1.4,cs.lanePush[sec][L]+0.5);} // 오브 확보 → 그 라인 압박(전령=탑, 드래곤=바텀). 미니언 아님.
   }else{
    if(i===5)cs.clock=1080;
-   cb=resolveTeamfight(cs,i,r.edgeA,r.margin,cs.clock,crng);
+   cs.clock+=28; // decision and regrouping window, in actual game seconds
+   const node=battlefield(i);cb=withMovement(()=>resolveTeamfight(cs,i,r.edgeA,r.margin,cs.clock,crng,node),node);
    for(let s=0;s<5;s++)lead[s]+=cb.resource[s];
    const fw=cb.fight!.winner;
    waIn=fw==='A'?true:fw==='B'?false:r.edgeA;
@@ -312,7 +343,8 @@ export function simulateSet(g:Game,m:Match):SetResult{
  // 연장전: 9번째 사건이라는 이유로 승자를 정하지 않는다. 넥서스가 아직이면 운영·교전·공성을 이어간다.
  while(!nexusDown&&cs.clock<CLOCK_CAP&&ei<EVENT_CAP-1){
   const r=rollFight(4,0);
-  const cb=resolveTeamfight(cs,9,r.edgeA,r.margin,cs.clock,crng);
+  cs.clock+=28;
+  const node=battlefield(9),cb=withMovement(()=>resolveTeamfight(cs,9,r.edgeA,r.margin,cs.clock,crng,node),node);
   for(let s=0;s<5;s++)lead[s]+=cb.resource[s];
   const fw=cb.fight!.winner;
   finalize(ei++,9,cb,r,fw==='A'?true:fw==='B'?false:r.edgeA);
@@ -344,7 +376,7 @@ export function simulateSet(g:Game,m:Match):SetResult{
    recentSiegeFails:siegeFails,tiebreakStage};
   const wsS=meta(winner).short;
   events.push({index:ei++,phase:'종료',title:capReason==='TIME'?'시간 상한':'사건 상한',winner,edge:winner,prob:50,advantage,powerA:0,powerB:0,goldA:Math.round(gA/10)*10,goldB:Math.round(gB/10)*10,
-   detail:`${capReason==='TIME'?'시간 상한(3600초)':'사건 상한(30개)'} 도달 — 넥서스 미파괴. 구조물 피해 ${sA}:${sB} · pressure ${pressureA}:${pressureB} · ${tiebreakStage==='coin'?'동전':tiebreakStage} 기준 ${wsS} 판정승(정상 종료와 구분).`,
+   detail:`${capReason==='TIME'?'시간 상한(3600초)':'사건 상한(60개)'} 도달 — 넥서스 미파괴. 구조물 피해 ${sA}:${sB} · pressure ${pressureA}:${pressureB} · ${tiebreakStage==='coin'?'동전':tiebreakStage} 기준 ${wsS} 판정승(정상 종료와 구분).`,
    beats:[],tier:'close',kills:{a:0,b:0},leadA:Math.round(lead.reduce((a,b)=>a+b,0)),resPowA:0,compA:0});
  }
  const own=m.a===g.teamId?pa:pb,other=m.a===g.teamId?pb:pa;const diffs=[avg(own.slice(0,3))-avg(other.slice(0,3)),own[3]-other[3],own[4]-other[4]];const weak=diffs.indexOf(Math.min(...diffs)),strong=diffs.indexOf(Math.max(...diffs));
@@ -419,7 +451,7 @@ export function simulateSet(g:Game,m:Match):SetResult{
  const endLine=endReason==='NEXUS'
   ?`${meta(winner).short}가 넥서스를 파괴하며 세트를 마무리했습니다.`
   :`${endReason==='CAP_TIME'?'시간 상한':'사건 상한'}으로 세트가 종료됐습니다 — ${meta(winner).short}가 구조물·교전 우위로 판정승(넥서스 미파괴).`;
- return {winner,endReason,capDiag,events,draft,pog,pogReason,powersA:pa,powersB:pb,leadA:lead.map(x=>Math.round(x)),draftFx:{lane:Math.round(de.lane*100)/100,obj:Math.round(de.obj*100)/100,fight:Math.round(de.fight*100)/100},lineupA:starters(g,m.a).map(p=>p.id),lineupB:starters(g,m.b).map(p=>p.id),recap:[`${['라인전','오브젝트','한타'][strong]} 파워 격차 ${diffs[strong]>=0?'+':''}${diffs[strong].toFixed(1)}. ${diffs[strong]>=0?'우리 팀이 우위를 만들었습니다.':'상대가 전반적인 전력에서 앞섰습니다.'}`,`${['라인전','오브젝트','한타'][weak]}에서 ${Math.abs(diffs[weak]).toFixed(1)}의 전력 ${diffs[weak]<0?'열세':'우위'}. ${weak===2?'피로와 조합, 팀 호흡을 함께 확인하세요.':weak===1?'정글·서포터 훈련과 운영 전술을 검토하세요.':'라인 주도권과 우선 라인을 조정해 보세요.'}`,`${endLine} 마지막 교전 우리 팀 승리 확률은 ${(m.a===g.teamId?lastTf.prob:100-lastTf.prob).toFixed(1)}%였습니다. 확률이 승리를 보장하지는 않습니다.`,`이 세트 POG ${ws[pogSlot].name}(${ROLES[pogSlot]}) — ${whyPog.join(', ')}. 승리 팀 5인의 실제 사건 기여를 합산해 뽑았습니다.`]};
+ return {winner,endReason,capDiag,events,draft,pog,pogReason,powersA:pa,powersB:pb,leadA:lead.map(x=>Math.round(x)),draftFx:{lane:Math.round(de.lane*100)/100,obj:Math.round(de.obj*100)/100,fight:Math.round(de.fight*100)/100},lineupA:starters(g,m.a).map(p=>p.id),lineupB:starters(g,m.b).map(p=>p.id),recap:[`${compositionPlan(winner===m.a?draft.picksA:draft.picksB).label} 조합이 승리했습니다. 실제 한타 ${events.filter(e=>e.combat?.fight?.winner===(winner===m.a?'A':'B')).length}회 승리, 구조물 철거 ${events.filter(e=>e.combat?.siege?.side===(winner===m.a?'A':'B')).reduce((n,e)=>n+(e.combat?.siege?.structuresDown??0),0)}개로 경기를 풀었습니다.`,`${['라인전','오브젝트','한타'][strong]} 파워 격차 ${diffs[strong]>=0?'+':''}${diffs[strong].toFixed(1)}. ${diffs[strong]>=0?'우리 팀이 우위를 만들었습니다.':'상대가 전반적인 전력에서 앞섰습니다.'}`,`${['라인전','오브젝트','한타'][weak]}에서 ${Math.abs(diffs[weak]).toFixed(1)}의 전력 ${diffs[weak]<0?'열세':'우위'}. ${weak===2?'피로와 조합, 팀 호흡을 함께 확인하세요.':weak===1?'정글·서포터 훈련과 운영 전술을 검토하세요.':'라인 주도권과 우선 라인을 조정해 보세요.'}`,`${endLine} 마지막 교전 우리 팀 승리 확률은 ${(m.a===g.teamId?lastTf.prob:100-lastTf.prob).toFixed(1)}%였습니다. 확률이 승리를 보장하지는 않습니다.`,`이 세트 POG ${ws[pogSlot].name}(${ROLES[pogSlot]}) — ${whyPog.join(', ')}. 승리 팀 5인의 실제 사건 기여를 합산해 뽑았습니다.`]};
 }
 function finishMatch(g:Game,m:Match){m.winner=m.scoreA>m.scoreB?m.a:m.b;const a=team(g,m.a),b=team(g,m.b);if(g.stage==='REGULAR'){a.sw+=m.scoreA;a.sl+=m.scoreB;b.sw+=m.scoreB;b.sl+=m.scoreA;(m.winner===m.a?a:b).wins++;(m.winner===m.a?b:a).losses++;}for(const t of [a,b]){for(const p of g.players.filter(p=>new Set(m.sets.flatMap(s=>t.id===m.a?s.lineupA:s.lineupB)).has(p.id))){p.burn=clamp(p.burn+4);p.form=clamp(p.form+(t.id===m.winner?2:-2));}t.familiarity[key(t)]=clamp((t.familiarity[key(t)]??20)+1,20,100);}
  for(const set of m.sets){const p=g.players.find(p=>p.id===set.pog);if(p)p.pog++;}
@@ -539,4 +571,24 @@ function finishInternational(g:Game){const i=g.international!;i.champion=i.brack
  let rank=0;if(i.participants.includes(g.teamId)){const loss=i.matches.filter(m=>[m.a,m.b].includes(g.teamId)&&m.winner!==g.teamId).at(-1);rank=i.champion===g.teamId?1:loss?.label.includes('FINAL')&&!loss?.label.includes('SEMIFINAL')&&!loss?.label.includes('QUARTERFINAL')?2:loss?.label.includes('SEMIFINAL')?3:loss?.label.includes('QUARTERFINAL')?5:9;}
  g.hall.unshift({season:g.season,split:i.kind,champion:i.champion!,rank});g.hall=g.hall.slice(0,100);for(const id of i.participants)pay(g,team(g,id),id===i.champion?(i.kind==='WORLD'?100000:50000):5000,'국제대회 상금');if(i.champion===g.teamId)team(g).fan=clamp(team(g).fan+10);
  news(g,`${meta(i.champion!).name}, ${i.kind==='WORLD'?'월드 챔피언십':'미드시즌 인비테이셔널'} 우승!`);
+}
+
+// Draft recommendations share the same composition evaluator as AI; no future match seed.
+export function draftRecommendations(g:Game,ds:DraftState,teamId:string,kind:'BAN'|'PICK'){
+ const other=teamId===ds.blue?ds.red:ds.blue;
+ const own=draftPicksOf(ds,teamId).map(p=>p.champ),enemy=draftPicksOf(ds,other).map(p=>p.champ);
+ const ids=kind==='PICK'?own:enemy,players=starters(g,kind==='PICK'?teamId:other);
+ const opposition=kind==='PICK'?enemy:own;
+ const base=draftFitScore(ids,opposition);
+ return legalDraftCandidates(g,ds).map(c=>{
+  const picks=[...ids,c.id];let best=-Infinity,role:Role=c.role,mastery=0;
+  for(const perm of ROLE_PERMS){
+   let score=0;
+   for(let i=0;i<picks.length;i++)score+=masteryLevel(players[ROLES.indexOf(perm[i])],picks[i])*2-assignCost(picks[i],perm[i])*3;
+   if(score>best){best=score;role=perm[picks.length-1];mastery=masteryLevel(players[ROLES.indexOf(role)],c.id);}
+  }
+  const fit=draftFitScore(picks,opposition)-base;
+  const score=best+fit*1.5+(isMeta(g,c.id)?3:0);
+  return {champ:c.id,score,role,reason:`${kind==='BAN'?'상대':'배정'} ${role} · 숙련 Lv${mastery} · ${compositionPlan(picks).label}${roleFit(c.id,role)==='off'?' · 오프롤 주의':''}`};
+ }).sort((a,b)=>b.score-a.score||a.champ.localeCompare(b.champ)).slice(0,3);
 }

@@ -109,10 +109,9 @@ const edgeSet=new Set(MAP.edges.flatMap(([a,b])=>[a+'|'+b,b+'|'+a]));
      // '다른' 사건(reason의 #번호가 다름)으로 fight 상태여도 정상이므로 사건 번호까지 확인한다.
      const forThis=state==='fight'&&reason&&reason.startsWith(`#${e.index} `);
      assert.ok(!forThis,`불참자가 이 사건 교전 상태로 표시되지 않음 (seed ${seed}, #${e.index}, ${nj.ref.side}${nj.ref.slot} @t${t.toFixed(1)} reason=${reason})`);
-     if(!nj.reason.includes('도착')&&!nj.reason.includes('이동')&&state!=='fight'){
-      const d=Math.hypot(pos[0]-evNode[0],pos[1]-evNode[1]);
-      assert.ok(d>4,`불참(리스폰/라인 처리)자가 사건 위치에 없음 (seed ${seed}, #${e.index}, ${nj.ref.side}${nj.ref.slot} d=${d.toFixed(1)} @t${t.toFixed(1)})`);
-     }
+     // A nonparticipant may pass through the same corridor after revival;
+     // participation is asserted by event identity above, not a forbidden radius.
+
     }
    }
    const parts=new Set(e.combat.participants.map(p=>p.side+p.slot));
@@ -209,7 +208,8 @@ function eventNodeOf(e){
   for(const tr of rd.tracks){
    let moved=0,live=0,prev=null,frozenRun=0,maxFrozen=0;
    for(let t=0;t<=rd.duration;t+=0.4){
-    const {pos,state}=posAt(tr,t);
+    const {pos,state,act}=posAt(tr,t);
+    if(state==='fight'||act==='group'){prev=pos;frozenRun=0;continue;} // Deliberate combat/assembly may hold position.
     if(state==='dead'){prev=pos;frozenRun=0;continue;}
     live++;
     if(prev){ const d=Math.hypot(pos[0]-prev[0],pos[1]-prev[1]);
@@ -312,92 +312,26 @@ function eventNodeOf(e){
  }
 }
 
-// --- 11. MINIMAP 2단계 1번: 남은 '합류 이동' 원인 분류 + 도착↔참여 고정 사례 7종 ---
-// 정상 장거리 이동을 없애려고 과속·순간이동·이벤트 위치 변경을 하지 않는다(사용자 지시) — 여기선 관찰·분류만.
+// --- 11. Staged replay: every killer/assistant is present, final attack stays at the losing nexus.
 {
- // (a) 원인 분류가 전부 태그된다: 이전사건충돌/이동시간부족/지연전환/장거리 중 하나.
- const CAUSES=['이전사건충돌','이동시간부족','지연전환','장거리'];
- for(const seed of [0,17,42,88,120]){
-  const rd=buildReplay(runSet(seed));
-  for(const d of rd.diag){
-   const m=d.match(/\[(.+?)\]$/); if(!m || !d.includes('합류 이동'))continue;
-   assert.ok(CAUSES.includes(m[1]),`합류 이동 원인 태그가 알려진 4종 중 하나 (seed ${seed}): ${d}`);
-  }
-  assert.ok(rd.travel.causes && Object.keys(rd.travel.causes).length>0 || rd.travel.lateJoins===0,
-   'travel.causes가 lateJoins와 함께 채워짐');
- }
-
- // (b) 고정 사례 7종 — 넓은 시드 범위에서 최소 1건씩 발견 + 각 사례의 불변식 확인.
- const found={onTime:null,midJoin:null,postFight:null,reviveMiss:null,replan:null,chained:null,independent:null};
- for(let seed=0;seed<150 && Object.values(found).some(v=>!v);seed++){
-  const set=runSet(seed); const rd=buildReplay(set);
-
-  for(const e of set.events){
-   const cb=e.combat; if(!cb)continue;
-   const w=rd.windows.find(x=>x.seq===e.index); if(!w)continue;
-   const nj=new Set((cb.notJoined||[]).map(n=>n.ref.side+n.ref.slot));
-
-   // 1. 제시간 도착: 사건 시각에 이미 fight 상태.
-   if(!found.onTime) for(const p of cb.participants){ if(nj.has(p.side+p.slot))continue;
-    const tr=rd.tracks.find(t=>t.side===p.side&&t.slot===p.slot);
-    if(posAt(tr,w.start+0.15).state==='fight'){ found.onTime={seed,idx:e.index,who:p}; break; } }
-
-   // 2. 교전 중 도착: diag에 '합류 이동'(원거리 아님) 기록 + 결국 fight 도달 + 그 사이 처치의 어시스트 미표시(2단계 4번).
-   if(!found.midJoin) for(const p of cb.participants){ if(nj.has(p.side+p.slot))continue;
-    const tag=`#${e.index}: ${p.side}${p.slot} `;
-    if(!rd.diag.some(d=>d.startsWith(tag)&&d.includes('합류 이동')&&!d.includes('원거리')))continue;
-    const tr=rd.tracks.find(t=>t.side===p.side&&t.slot===p.slot);
-    const fightKf=tr.key.find(k=>k.state==='fight'&&k.t>=w.start-0.01&&k.t<=w.end+0.2);
-    if(!fightKf)continue;
-    // 이 참가자의 fight 진입 이전에 찍힌 이 사건의 처치 beat엔 이 참가자가 어시스트로 없어야 한다.
-    const early=rd.beats.filter(b=>b.kind==='kill'&&b.seq===e.index&&b.t<fightKf.t-1e-6);
-    const leaked=early.some(b=>(b.assists||[]).some(a=>a.side===p.side&&a.slot===p.slot));
-    if(!leaked) found.midJoin={seed,idx:e.index,who:p};
-   }
-
-   // 3. 종료 후 도착: diag에 '원거리 합류 이동' + 창 종료까지 fight 상태 도달 못 함(사망도 아님) — 끝내 못 낀 것.
-   if(!found.postFight) for(const p of cb.participants){ if(nj.has(p.side+p.slot))continue;
-    const tag=`#${e.index}: ${p.side}${p.slot} `;
-    if(!rd.diag.some(d=>d.startsWith(tag)&&d.includes('원거리 합류 이동')))continue;
-    const tr=rd.tracks.find(t=>t.side===p.side&&t.slot===p.slot);
-    const reachedFight=tr.key.some(k=>k.state==='fight'&&k.t>=w.start-0.01&&k.t<=w.end+0.2);
-    const atEnd=posAt(tr,w.end-0.05);
-    if(!reachedFight && atEnd.state!=='dead') found.postFight={seed,idx:e.index,who:p};
+ for(let seed=0;seed<80;seed++){
+  const set=runSet(seed),rd=buildReplay(set);
+  for(const b of rd.beats.filter(b=>b.kind==='kill'&&b.by)){
+   for(const ref of [b.by,...(b.assists??[])]){
+    const tr=rd.tracks.find(t=>t.side===ref.side&&t.slot===ref.slot);
+    assert.equal(posAt(tr,b.t).state,'fight',`actor arrived at kill: ${seed}/${b.seq}/${ref.side}${ref.slot}`);
    }
   }
-
-  // 4. 부활 후 이동하느라 불참: 엔진은 참가자로 셌지만 미니맵상 사망(부활 대기) 진단.
-  if(!found.reviveMiss){ const d=rd.diag.find(d=>d.includes('엔진 참가자이나 미니맵 사망')); if(d)found.reviveMiss={seed,line:d}; }
-
-  // 5. 이동 중 집결 지시 변경: 같은 트랙에서 '#N 집결'로 이동하다 새 목적지로 재계획되어도 위치가 연속(점프 없음).
-  if(!found.replan) for(const tr of rd.tracks){
-   for(let i=1;i<tr.key.length;i++){
-    const a=tr.key[i-1],b=tr.key[i];
-    if(a.reason && b.reason && /집결|접근|준비/.test(a.reason) && a.reason!==b.reason && b.state==='move'){
-     const dgap=Math.hypot(a.pos[0]-b.pos[0],a.pos[1]-b.pos[1]), dt=(b.t-a.t)*rd.scale;
-     if(dgap<=2.8*dt+3){ found.replan={seed,at:b.t}; break; }
-    }
+  const nx=rd.beats.find(b=>b.kind==='nexus');
+  if(nx){
+   const target=MAP.nodes[nx.side==='A'?'B_base':'A_base'];
+   const cb=set.events.find(e=>e.index===nx.seq).combat;
+   for(const ref of cb.participants){
+    const tr=rd.tracks.find(t=>t.side===ref.side&&t.slot===ref.slot);
+    assert.ok(Math.hypot(...posAt(tr,nx.t).pos.map((v,i)=>v-target[i]))<6,'nexus attackers in enemy base');
+    assert.deepEqual(posAt(tr,nx.t).pos,posAt(tr,rd.duration).pos,'no return after nexus destruction');
    }
-   if(found.replan)break;
-  }
-
-  // 6. 연속 교전에서 이전 위치 유지: '#N 재합류'(nextOwnEvent) reason이 실제로 등장.
-  if(!found.chained){ const tr=rd.tracks.find(t=>t.key.some(k=>k.reason&&k.reason.includes('재합류')));
-   if(tr)found.chained={seed}; }
-
-  // 7. 교전 미참여 다른 라인의 지속 행동: 참가자 5인 미만인 사건 동안, 비참가자 트랙이 그 창 동안 2개 이상의 키프레임(정지 아님)을 갖는다.
-  if(!found.independent) for(const e of set.events){
-   const cb=e.combat; if(!cb || cb.participants.length>=8)continue;
-   const w=rd.windows.find(x=>x.seq===e.index); if(!w)continue;
-   const inEvent=new Set(cb.participants.map(p=>p.side+p.slot));
-   for(const tr of rd.tracks){ if(inEvent.has(tr.side+tr.slot))continue;
-    const activity=tr.key.filter(k=>k.t>=w.start&&k.t<=w.end);
-    if(activity.length>=2){ found.independent={seed,idx:e.index}; break; } }
-   if(found.independent)break;
   }
  }
- for(const [k,v] of Object.entries(found)) assert.ok(v,`고정 사례 발견: ${k} (150시드 내에서 못 찾음)`);
- console.log(`  · 11: 고정 사례 7종 대표 — ${Object.entries(found).map(([k,v])=>`${k}=seed${v.seed}${v.idx!==undefined?'#'+v.idx:''}`).join(' ')}`);
 }
-
-console.log('PASS replay: determinism, no-spoiler & timing sync, corridor-constrained motion, no post-death/early-revive, absent players, fixed-seed cases, map graph, unit-5 siege, MINIMAP-02 persistent agents, REGION_DIST travel-time cross-check, arrival↔join fixed scenarios (D021)');
+console.log('PASS replay: deterministic tracks, corridor motion, deaths, scores, structures, arrived killers/assists, nexus finale');

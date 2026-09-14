@@ -1,0 +1,1 @@
+PASS narration: determinism, event fields, monotonic clock, memory callbacks, kill-count integrity, intensity variety, grounded manager levers

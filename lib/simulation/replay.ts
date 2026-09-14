@@ -30,84 +30,9 @@
 
 import {REGION_DIST,regionTime} from './combat.ts';   // 엔진 추상 지역 이동 시간표(단일 출처) — 미니맵 이동 시간 대조용
 
-export type Side='A'|'B';
-export type Vec=[number,number];
-export type Slot=0|1|2|3|4;
-export type Ref={side:Side,slot:number};
-export type EngRegion='base'|'top'|'mid'|'bot'|'river';
+import {MAP,WALK,dist,dijkstra,type Side,type Vec,type Slot,type Ref,type EngRegion} from './arena.ts';
+export {MAP,WALK,pathBetween,type Side,type Vec,type Slot,type Ref,type EngRegion} from './arena.ts';
 
-// ── 지도(공개 계약): 0~100 좌표계. SVG y는 아래로 증가. A(블루)=좌하, B(레드)=우상. ─────
-export const MAP:{size:number,nodes:Record<string,Vec>,edges:[string,string][]}={
- size:100,
- nodes:{
-  A_base:[12,88], B_base:[88,12],
-  A_top:[12,54], top_mid:[24,18], B_top:[52,11],
-  A_mid:[32,66], mid:[50,50], B_mid:[68,34],
-  A_bot:[46,89], bot_mid:[82,78], B_bot:[89,46],
-  baron:[37,37], dragon:[63,63],
-  A_jg_t:[26,42], A_jg_b:[44,68], B_jg_t:[56,32], B_jg_b:[74,58],
- },
- edges:[
-  ['A_base','A_top'],['A_top','top_mid'],['top_mid','B_top'],['B_top','B_base'],
-  ['A_base','A_mid'],['A_mid','mid'],['mid','B_mid'],['B_mid','B_base'],
-  ['A_base','A_bot'],['A_bot','bot_mid'],['bot_mid','B_bot'],['B_bot','B_base'],
-  ['A_base','A_jg_t'],['A_jg_t','A_top'],['A_jg_t','mid'],['A_jg_t','baron'],
-  ['A_base','A_jg_b'],['A_jg_b','A_bot'],['A_jg_b','mid'],['A_jg_b','dragon'],
-  ['B_base','B_jg_t'],['B_jg_t','B_top'],['B_jg_t','mid'],['B_jg_t','baron'],
-  ['B_base','B_jg_b'],['B_jg_b','B_bot'],['B_jg_b','mid'],['B_jg_b','dragon'],
-  ['mid','baron'],['mid','dragon'],['A_jg_b','B_jg_b'],['A_jg_t','B_jg_t'],
- ],
-};
-
-const dist=(a:Vec,b:Vec)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
-
-function dijkstra(adj:Record<string,string[]>,nodes:Record<string,Vec>,from:string,to:string):string[]{
- if(from===to)return [from];
- const prev:Record<string,string|null>={[from]:null};
- const best:Record<string,number>={[from]:0};
- const pq:[number,string][]=[[0,from]];const done=new Set<string>();
- while(pq.length){
-  pq.sort((a,b)=>a[0]-b[0]);const [d,u]=pq.shift()!;
-  if(done.has(u))continue;done.add(u);
-  if(u===to)break;
-  for(const v of adj[u]??[]){
-   const nd=d+dist(nodes[u],nodes[v]);
-   if(best[v]===undefined||nd<best[v]){best[v]=nd;prev[v]=u;pq.push([nd,v]);}
-  }
- }
- if(prev[to]===undefined)return [from,to];
- const out:string[]=[];for(let c:string|null=to;c;c=prev[c])out.unshift(c);
- return out;
-}
-
-// 통로 그래프 최단 경로(노드 이름 배열, 공개). 벽 가로지르기 방지의 근거.
-export function pathBetween(from:string,to:string):string[]{
- const adj:Record<string,string[]>={};
- for(const [x,y] of MAP.edges){(adj[x]??=[]).push(y);(adj[y]??=[]).push(x);}
- return dijkstra(adj,MAP.nodes,from,to);
-}
-
-// ── WALK: 이동용 보행 그래프. MAP을 한 번 세분(각 통로에 중점) + 정글 캠프·분수대 ─────────
-// 중점은 원 통로 선분 위에 있으므로 벽을 넘지 않는다. 임의 목적지는 이 그래프 위 최근접점으로 스냅.
-export const WALK=(()=>{
- const nodes:Record<string,Vec>={...MAP.nodes};
- const edges:[string,string][]=[];
- MAP.edges.forEach(([a,b],i)=>{
-  const mn='w'+i;
-  nodes[mn]=[(MAP.nodes[a][0]+MAP.nodes[b][0])/2,(MAP.nodes[a][1]+MAP.nodes[b][1])/2];
-  edges.push([a,mn],[mn,b]);
- });
- // 정글 캠프(순찰 2점) — 각 정글 노드에서 자기 진영 쪽으로 소량 offset. 캠프 전투 없음(이동 표현만).
- const camps:[string,number,number][]=[['A_jg_t',-5,7],['A_jg_b',-6,8],['B_jg_t',5,-7],['B_jg_b',6,-8]];
- for(const [base,dx,dy] of camps){ nodes[base+'C']=[MAP.nodes[base][0]+dx,MAP.nodes[base][1]+dy]; edges.push([base,base+'C']); }
- // 분수대(부활 지점) — 베이스 안쪽
- nodes.A_ft=[MAP.nodes.A_base[0]+3,MAP.nodes.A_base[1]-3];
- nodes.B_ft=[MAP.nodes.B_base[0]-3,MAP.nodes.B_base[1]+3];
- edges.push(['A_base','A_ft'],['B_base','B_ft']);
- const adj:Record<string,string[]>={};
- for(const [x,y] of edges){(adj[x]??=[]).push(y);(adj[y]??=[]).push(x);}
- return {nodes,edges,adj};
-})();
 const WN=WALK.nodes;
 
 // 통로 선분 목록(벽 침범 검사·최근접 투영용)
@@ -196,14 +121,15 @@ export type ReplayData={
 // ── 사건이 벌어지는 WALK 노드명(엔진 데이터 기반). 모두 도달 가능한 통로 노드. ──────────
 function eventNodeName(e:any):string{
  const cb=e.combat;
+ if(cb?.location&&MAP.nodes[cb.location])return cb.location;
  if(cb?.kind==='siege'){
   const def:Side=cb.side==='A'?'B':'A';
   const L=cb.siege?.lane;
-  if(L===undefined||L<0) return def==='A'?'A_base':'B_base';
+  if(cb.siege?.targetBase||cb.siege?.nexus||L===undefined||L<0) return def==='A'?'A_base':'B_base';
   return (def==='A'?['A_top','mid','A_bot']:['B_top','mid','B_bot'])[L];
  }
  if(cb?.kind==='objective') return cb.objective.kind==='herald'?'baron':'dragon';
- if(cb?.kind==='teamfight'){ const s=e.index; return s===5||s===6?(s===5?'dragon':'baron'):'mid'; }
+ if(cb?.kind==='teamfight'){ const s=cb.seq; return s===5||s===6?(s===5?'dragon':'baron'):'mid'; }
  // 갱킹(라인 0·1·2) — 라인 대치 지점(양쪽이 실제로 도달 가능). 지는 쪽으로 살짝 치우침.
  const lose:Side=cb?.side==='A'?'B':'A';
  const lane=(cb?.lane ?? 1) as 0|1|2;
@@ -290,7 +216,8 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
   ev.stime=ev.eclock+ev.showDelay;
   if(ev.stime<=(evInfo[i-1]?.stime??-1)) ev.stime=(evInfo[i-1]!.stime)+2; // 단조 보장
  }
- const endClock=(evInfo.at(-1)?.stime??600)+70;
+ let endClock=(evInfo.at(-1)?.stime??600)+70;
+ let terminalAt:number|null=null;
  const T=(clock:number)=>clock/SCALE;
 
  const agents:Agent[]=[];
@@ -337,10 +264,10 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
  };
 
  const laneWinner=(lane:0|1|2):Side|null=>{
-  const le=evInfo.find(x=>x.idx===lane);
-  return le?.e.edge==='nva'?'A':le?.e.edge==='crn'?'B':null;
+  const le=evInfo.find(x=>x.idx===lane&&x.done);
+  return le?.cb?.side??null;
  };
- const lateAdv=()=> (evInfo.find(x=>x.idx>=5)?.e.advantage ?? 0);
+ const lateAdv=()=> (evInfo.filter(x=>x.done).at(-1)?.e.advantage ?? 0);
  // 다가오는 큰 교전(오브·한타): 참가 예정이면 미리 그쪽으로 드리프트(정식 계획 이전).
  const groupSoon=(a:Agent,clock:number)=>evInfo.find(x=>!x.done
   && (x.cb?.kind==='teamfight'||x.cb?.kind==='objective')
@@ -352,7 +279,7 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
   if(!a.alive) return;
   if(a.plan){ headTo(a,a.plan.node); a.act='group'; a.nextDecide=clock+4; emit(a,clock,'move',`#${a.plan.ev} 집결`); return; }
   const gs=groupSoon(a,clock);
-  if(gs && a.slot!==1){ headTo(a,gs.node); a.act='group'; a.nextDecide=clock+7+jit(2); emit(a,clock,'move',`${gs.cb?.kind==='objective'?'오브':'한타'} 집결`); return; }
+  if(gs){ headTo(a,gs.node); a.act='group'; a.nextDecide=clock+7+jit(2); emit(a,clock,'move',`${gs.cb?.kind==='objective'?'오브':'한타'} 집결`); return; }
   const here=curNode(a);
   // 목적지는 항상 지금 노드와 달라야 한다(같으면 정지). 후보에서 현재 노드 제외.
   const pickDiff=(cands:string[],fallback:string)=>{ const c=cands.filter(n=>n&&n!==here); return c.length?c[Math.floor(rng()*c.length)]:fallback; };
@@ -368,7 +295,7 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
     const patrol=JG_PATROL[a.side][a.jgIdx%2];
     dest=pickDiff(patrol,patrol[0]); why='정글 이동'; act='jungle';
    }
-   headTo(a,dest); a.act=act; a.nextDecide=clock+7+jit(2.5); emit(a,clock,'move',why); return;
+   headTo(a,dest); a.act=act; a.nextDecide=clock+22+jit(5); emit(a,clock,'move',why); return;
   }
 
   if(a.slot===4){ // 서포터: 원딜의 farm zone에 맞춰 왕복(좌표 복제 아님) / 조건부 로밍
@@ -376,7 +303,7 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
    const L=laneRefs(2,a.side), chain=[L.own,L.safe,L.contest,L.push,L.deep];
    let dest:string, why:string, act:Act;
    if(!adc.alive){ dest=pickDiff([L.own,L.safe],L.safe); why='바텀 정비'; act='lane'; }
-   else if(rng()<0.13){ dest=laneRefs(1,a.side).contest; why='미드 로밍'; act='roam'; }
+   else if(clock>600&&rng()<0.06){ dest=laneRefs(1,a.side).contest; why='미드 로밍'; act='roam'; }
    else{
     let idx=chain.indexOf(curNode(adc)); if(idx<0)idx=2;
     const front=chain[Math.min(4,idx+1)], back=chain[Math.max(0,idx)];
@@ -401,7 +328,7 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
   const dest=pickDiff(zone, chain[Math.round(cz)]);
   a.act='lane';
   headTo(a,dest);
-  a.nextDecide=clock+7+jit(3);
+  a.nextDecide=clock+20+jit(5);
   emit(a,clock,'move', a.pushBias>0.15?'라인 압박':a.pushBias<-0.15?'라인 수비':'라인 유지');
  };
 
@@ -420,7 +347,7 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
  const shortfallFlags=new Set<string>();
 
  for(let clock=0; clock<=endClock+1; clock+=DT){
-  for(const a of agents) if(!a.alive && clock>=a.respawnAt){
+  for(const a of agents) if(terminalAt===null && !a.alive && clock>=a.respawnAt){
    a.alive=true; a.fixedPos=null; a.route=[FOUNT[a.side]]; a.seg=0; a.segT=0; a.act='base'; a.plan=null; a.pendingDest=null; a.freeSince=clock;
    delete fightUntil[a.side+a.slot]; delete arriving[a.side+a.slot];
    emit(a,clock,'idle','부활');
@@ -429,6 +356,28 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
   }
   for(const ev of evInfo){
    if(!ev.armed || ev.done || clock<ev.stime) continue;
+   // Playback staging only: keep the source event intact, finish travel before showing its actions.
+   // The engine clock is displayed separately; presentation delay never rewrites kills/resources.
+   if(evInfo.slice(0,evInfo.indexOf(ev)).some(x=>!x.done)) continue;
+   for(const r of ev.parts){const a=ag(r),key=r.side+r.slot;
+    if(a.alive&&!ev.notJoined.some(n=>n.side===r.side&&n.slot===r.slot)&&!(fightUntil[key]>clock)&&!arriving[key]){
+     a.plan={ev:ev.idx,node:ev.node};headTo(a,ev.node);a.act='group';
+    }
+   }
+   const waiting=ev.parts.some(r=>{
+    if(ev.notJoined.some(n=>n.side===r.side&&n.slot===r.slot))return false;
+    const a=ag(r);return !a.alive||dist(posOf(a),WN[ev.node])>5;
+   });
+   if(waiting){
+    if(ev.showDelay>600)throw new Error(`Replay staging blocked #${ev.idx}: ${JSON.stringify(ev.parts.map(r=>{const a=ag(r);return {r,pos:posOf(a),alive:a.alive,plan:a.plan,fu:fightUntil[r.side+r.slot],arr:arriving[r.side+r.slot]};}))}`);
+    ev.stime+=DT;ev.showDelay+=DT;
+    for(const later of evInfo)if(!later.done&&later!==ev&&later.stime<=ev.stime+ev.tail+5){
+     later.stime=ev.stime+ev.tail+5;
+    }
+    for(const w of windows){const x=evInfo.find(x=>x.idx===w.seq)!;w.end=T(x.stime+x.tail);}
+    endClock=Math.max(endClock,(evInfo.at(-1)?.stime??clock)+70);
+    continue;
+   }
    ev.done=true;
    const cb=ev.cb, evPos=WN[ev.node], EC=ev.eclock;
    const evT=Math.max(ev.stime,clock);   // 화면 시각: stime과 현재 tick 중 늦은 쪽(같은 tick 내 사망이 먼저 찍히는 것 방지)
@@ -465,7 +414,7 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
     }
    }
    beats.push({t:T(evT),seq:ev.idx,engineClock:EC,kind:'engage',side:cb?cb.side:'A',text:`${ev.e.title} — 교전`});
-   beats.push({t:T(evT)+0.05,seq:ev.idx,engineClock:EC,kind:'line',text:ev.e.detail,side:cb?cb.side:undefined});
+   beats.push({t:T(evT+ev.kills.length*3)+0.05,seq:ev.idx,engineClock:EC,kind:'line',text:ev.e.detail,side:cb?cb.side:undefined});
    if(cb?.committed){ const jr=cb.participants.find((p:any)=>p.slot===1);
     if(jr) beats.push({t:T(evT)-0.1,seq:ev.idx,engineClock:EC,kind:'approach',side:cb.side,
      ref:{side:jr.side,slot:1},text:`정글 합류 (${cb.lane===0?'탑':cb.lane===1?'미드':'바텀'})`}); }
@@ -504,7 +453,9 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
     const defS:Side=sg.side==='A'?'B':'A';
     structState[defS]=[...sg.structAfter];
     if(defS==='A')structState.baseA=sg.baseTurretsAfter; else structState.baseB=sg.baseTurretsAfter;
-    if(sg.nexus){ if(defS==='A')structState.nexusA=true; else structState.nexusB=true; }
+    if(sg.nexus){ terminalAt=evT+12;endClock=terminalAt;
+     for(const a of agents)if(a.alive)fightUntil[a.side+a.slot]=Infinity;
+     if(defS==='A')structState.nexusA=true; else structState.nexusB=true; }
     const snap:StructSnapshot={A:[...structState.A],B:[...structState.B],baseA:structState.baseA,baseB:structState.baseB,nexusA:structState.nexusA,nexusB:structState.nexusB};
     beats.push({t:T(evT)+0.2,seq:ev.idx,engineClock:EC,kind:sg.nexus?'nexus':'siege',side:sg.side,struct:snap,
      text: sg.structuresDown>0
@@ -541,7 +492,7 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
     if(eta>ev.stime+8){ diag.push(`#${ev.idx} @${Math.round(ev.eclock)}s: ${a.side}${a.slot} 이동시간 부족(도착 ~${Math.round(eta)}s, lead ${Math.round(lead)})`); shortfallFlags.add(`${ev.idx}|${a.side}${a.slot}`); }
    }
    // 교전 정지 창(tail)이 다음 사건까지 걸어갈 시간을 남긴다(연속 한타→공성에서 참가자가 실제로 이동).
-   ev.tail=Math.max(5,Math.min(8+ev.kills.length*5,(evInfo[ei+1]?.stime??Infinity)-ev.stime-14));
+   ev.tail=8+ev.kills.length*5; // Never release actors before the final recorded kill.
    ev.lead=lead; ev.armed=true;
    windows.push({seq:ev.idx,start:T(ev.stime-lead),end:T(ev.stime+ev.tail),engineClock:ev.eclock,
     label:ev.e.title,kind:ev.cb?ev.cb.kind:'teamfight'});
@@ -633,12 +584,18 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
 export function stateAt(rd:ReplayData,t:number){
  let a=0,b=0;const feed:{t:number,text:string,side?:Side,ref?:Ref,by?:Ref}[]=[];
  const deadNow:Record<string,boolean>={};
+ const kda=Object.fromEntries(rd.tracks.map(tr=>[tr.side+tr.slot,{kills:0,deaths:0,assists:0}]));
  let line='';let seq=0;
  let struct:StructSnapshot={A:[0,0,0],B:[0,0,0],baseA:2,baseB:2,nexusA:false,nexusB:false};
  for(const bt of rd.beats){
   if(bt.t>t)break;
   if(bt.scoreDelta){a+=bt.scoreDelta[0];b+=bt.scoreDelta[1];}
-  if(bt.kind==='kill'&&bt.ref) deadNow[bt.ref.side+' '+bt.ref.slot]=true;
+  if(bt.kind==='kill'&&bt.ref){
+   deadNow[bt.ref.side+' '+bt.ref.slot]=true;
+   const victim=kda[bt.ref.side+bt.ref.slot];if(victim)victim.deaths++;
+   const killer=bt.by&&kda[bt.by.side+bt.by.slot];if(killer)killer.kills++;
+   const seen=new Set<string>();for(const ref of bt.assists??[]){const key=ref.side+ref.slot;if(!seen.has(key)&&key!==bt.by?.side+String(bt.by?.slot)&&kda[key]){kda[key].assists++;seen.add(key);}}
+  }
   if(bt.kind==='revive'&&bt.ref) deadNow[bt.ref.side+' '+bt.ref.slot]=false;
   if(bt.kind==='line'&&bt.text) line=bt.text;
   if(bt.struct) struct=bt.struct;
@@ -646,15 +603,12 @@ export function stateAt(rd:ReplayData,t:number){
   if(['kill','secure','revive','noshow','escape','siege','nexus'].includes(bt.kind)) feed.push({t:bt.t,text:bt.text??bt.kind,side:bt.side,ref:bt.ref,by:bt.by});
  }
  let ga=2500,gb=2500;
- for(let i=1;i<rd.goldKeys.length;i++){
-  const k0=rd.goldKeys[i-1],k1=rd.goldKeys[i];
-  if(t<=k1.t){const r=(t-k0.t)/((k1.t-k0.t)||1);ga=k0.a+(k1.a-k0.a)*Math.max(0,Math.min(1,r));gb=k0.b+(k1.b-k0.b)*Math.max(0,Math.min(1,r));break;}
-  ga=k1.a;gb=k1.b;
- }
+ for(const k of rd.goldKeys){if(k.t>t)break;ga=k.a;gb=k.b;}
+
  const win=rd.windows.find(w=>t>=w.start&&t<w.end)??rd.windows.filter(w=>w.start<=t).pop()??rd.windows[0];
  return {score:[a,b] as [number,number], gold:[Math.round(ga),Math.round(gb)] as [number,number],
-  dead:deadNow, feed:feed.slice(-5), line, seq, engineClock:win?win.engineClock:0,
-  gameClock:Math.round(t*rd.scale), window:win, struct};
+  dead:deadNow, kda, completed:rd.windows.filter(w=>w.end<=t).length, feed:feed.slice(-5), line, seq, engineClock:win?win.engineClock:0,
+  gameClock:(()=>{const pts=rd.beats.filter(b=>b.kind==='engage');let before={t:0,engineClock:0};for(const next of pts){if(next.t>t)return Math.round(before.engineClock+(next.engineClock-before.engineClock)*Math.max(0,Math.min(1,(t-before.t)/(next.t-before.t||1))));before=next;}return before.engineClock;})(), window:win, struct};
 }
 
 // 트랙 t에서의 위치(키프레임 선분 보간). 사망 구간은 정지.
@@ -665,9 +619,9 @@ export function posAt(track:Track,t:number):{pos:Vec,state:TrackKey['state'],act
   if(t<=k[i].t){
    const r=(t-k[i-1].t)/((k[i].t-k[i-1].t)||1);
    // 사망·교전 키프레임은 정지(다음 키프레임까지 그 자리). 교전 클러스터가 통로 밖으로 보간되는 것 방지.
-   if(k[i-1].state==='dead'||k[i-1].state==='fight')return {pos:k[i-1].pos,state:k[i-1].state,act:k[i-1].act,reason:k[i-1].reason};
+   if(t<k[i].t&&(k[i-1].state==='dead'||k[i-1].state==='fight'))return {pos:k[i-1].pos,state:k[i-1].state,act:k[i-1].act,reason:k[i-1].reason};
    return {pos:[k[i-1].pos[0]+(k[i].pos[0]-k[i-1].pos[0])*r, k[i-1].pos[1]+(k[i].pos[1]-k[i-1].pos[1])*r],
-    state:k[i].state,act:k[i].act,reason:k[i].reason};
+    state:r<1?k[i-1].state:k[i].state,act:r<1?k[i-1].act:k[i].act,reason:r<1?k[i-1].reason:k[i].reason};
   }
  }
  const last=k[k.length-1];

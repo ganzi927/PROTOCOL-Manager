@@ -1,0 +1,4 @@
+nva 1428 commands, 4 seasons complete
+crn 1441 commands, 4 seasons complete
+rse 1150 commands, 4 seasons complete
+PASS 3 careers; 1086 deterministic user sets; schedule/draft/season invariants

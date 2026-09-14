@@ -1,0 +1,35 @@
+{
+  "N": 1000,
+  "weakTeamStats": 65,
+  "strongTeamStats": 70,
+  "opponent": [
+    "Tfiora",
+    "Jelise",
+    "Mahri",
+    "Aakshan",
+    "Sannie"
+  ],
+  "late": {
+    "picks": [
+      "Taatrox",
+      "Jbelveth",
+      "Makali",
+      "Aaphelios",
+      "Sjanna"
+    ],
+    "win": 25.7,
+    "cap": 1.9
+  },
+  "engage": {
+    "picks": [
+      "Taatrox",
+      "Jamumu",
+      "Makali",
+      "Aashe",
+      "Salistar"
+    ],
+    "win": 42.6,
+    "cap": 1.6
+  }
+}
+PASS director: archetypes, conditional counters, growth timing, single fight channel, underdog draft leverage

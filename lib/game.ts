@@ -29,7 +29,7 @@ export const domestic=(t:{id:string})=>TEAM_META.some(m=>m.id===t.id);
 export type International={kind:'MIDSEASON'|'WORLD',stage:'SWISS'|'BRACKET'|'DONE',round:number,participants:string[],table:{id:string,wins:number,losses:number,opponents:string[]}[],queue:Match[],matches:Match[],bracket:string[],champion?:string};
 export type Mastery={champ:string,level:number,xp:number};
 export const MASTERY_CAP=4,MASTERY_XP=100,MASTERY_POOL=8;
-export type Player={id:string,name:string,realName:string,role:Role,teamId:string|null,age:number,stats:number[],pot:number[],form:number,burn:number,salary:number,until:number,training:string,trainChamp?:string,mastery:Mastery[],pog:number,growth:number,nextSalary?:number,nextUntil?:number,releasedSeason?:number};
+export type Player={id:string,name:string,realName:string,role:Role,teamId:string|null,age:number,stats:number[],pot:number[],form:number,burn:number,salary:number,until:number,training:string,trainChamp?:string,mastery:Mastery[],pog:number,growth:number,nextSalary?:number,nextUntil?:number,releasedSeason?:number,kills?:number,deaths?:number,assists?:number};
 export type Team={id:string,lineup:Record<Role,string>,familiarity:Record<string,number>,cash:number,fan:number,expected:number,tactic:string,focus:string,wins:number,losses:number,sw:number,sl:number,points:number,staff?:Record<string,number>};
 export type Draft={picksA:string[],picksB:string[],bans:string[],actions:{team:string,kind:string,champ:string}[]};
 export type DraftPick={champ:string,role:Role};
@@ -44,6 +44,7 @@ export type Command={type:string,payload?:Record<string,unknown>};
 export const clamp=(v:number,a=0,b=100)=>Math.min(b,Math.max(a,v));
 export const avg=(ns:number[])=>ns.reduce((a,b)=>a+b,0)/(ns.length||1);
 export const ovr=(p:Player)=>Math.round(avg(p.stats));
+export const kda=(p:Player)=>{const k=p.kills??0,d=p.deaths??0,a=p.assists??0;return d===0?k+a:(k+a)/d;};
 export const money=(v:number)=>(v/10000).toFixed(2)+'억';
 export const meta=(id:string)=>[...TEAM_META,...FOREIGN_META].find(t=>t.id===id)!;
 export function random(seed:number){let a=seed>>>0;return()=>{a+=0x6D2B79F5;let t=a;t=Math.imul(t^t>>>15,t|1);t^=t+Math.imul(t^t>>>7,t|61);return((t^t>>>14)>>>0)/4294967296;};}
@@ -83,7 +84,7 @@ function makePlayer(n:number,role:Role,teamId:string|null,base:number,season:num
  const r=ROLES.indexOf(role);const shapes=[[10,-4,0,-4,2,-4],[0,-2,10,-4,4,-8],[8,-4,-2,-4,4,-2],[-4,12,0,-6,4,-6],[-4,4,4,10,-6,-8]];
  const stats=shapes[r].map(d=>Math.round(clamp(base+d+(rng()-.5)*6,15,96)*100)/100);
  const id=`p${season}-${n}`;
- return {id,name:handles[n%handles.length]+(n>=70?String(season)+String(n-69):''),realName:['김','이','박','정','장'][n%5]+['도윤','시우','지호','민준','현우','서준','우진'][n%7],role,teamId,age:18+Math.floor(rng()*10),stats,pot:stats.map(s=>clamp(s+8+rng()*12,1,99)),form:50,burn:0,salary:Math.round(20000*(avg(stats)/50)**2),until:season+1,training:'scrim',mastery:makeMastery(role,id,base),pog:0,growth:0};
+ return {id,name:handles[n%handles.length]+(n>=70?String(season)+String(n-69):''),realName:['김','이','박','정','장'][n%5]+['도윤','시우','지호','민준','현우','서준','우진'][n%7],role,teamId,age:18+Math.floor(rng()*10),stats,pot:stats.map(s=>clamp(s+8+rng()*12,1,99)),form:50,burn:0,salary:Math.round(20000*(avg(stats)/50)**2),until:season+1,training:'scrim',mastery:makeMastery(role,id,base),pog:0,growth:0,kills:0,deaths:0,assists:0};
 }
 export function schedule(ids:string[]){const order=[...ids],a:string[][][]=[];for(let r=0;r<9;r++){a.push(Array.from({length:5},(_,i)=>r%2?[order[9-i],order[i]]:[order[i],order[9-i]]));order.splice(1,0,order.pop()!);}return [...a,...a.map(row=>row.map(([x,y])=>[y,x]))];}
 export const team=(g:Game,id=g.teamId)=>g.teams.find(t=>t.id===id)!;
@@ -454,7 +455,13 @@ export function simulateSet(g:Game,m:Match):SetResult{
  return {winner,endReason,capDiag,events,draft,pog,pogReason,powersA:pa,powersB:pb,leadA:lead.map(x=>Math.round(x)),draftFx:{lane:Math.round(de.lane*100)/100,obj:Math.round(de.obj*100)/100,fight:Math.round(de.fight*100)/100},lineupA:starters(g,m.a).map(p=>p.id),lineupB:starters(g,m.b).map(p=>p.id),recap:[`${compositionPlan(winner===m.a?draft.picksA:draft.picksB).label} 조합이 승리했습니다. 실제 한타 ${events.filter(e=>e.combat?.fight?.winner===(winner===m.a?'A':'B')).length}회 승리, 구조물 철거 ${events.filter(e=>e.combat?.siege?.side===(winner===m.a?'A':'B')).reduce((n,e)=>n+(e.combat?.siege?.structuresDown??0),0)}개로 경기를 풀었습니다.`,`${['라인전','오브젝트','한타'][strong]} 파워 격차 ${diffs[strong]>=0?'+':''}${diffs[strong].toFixed(1)}. ${diffs[strong]>=0?'우리 팀이 우위를 만들었습니다.':'상대가 전반적인 전력에서 앞섰습니다.'}`,`${['라인전','오브젝트','한타'][weak]}에서 ${Math.abs(diffs[weak]).toFixed(1)}의 전력 ${diffs[weak]<0?'열세':'우위'}. ${weak===2?'피로와 조합, 팀 호흡을 함께 확인하세요.':weak===1?'정글·서포터 훈련과 운영 전술을 검토하세요.':'라인 주도권과 우선 라인을 조정해 보세요.'}`,`${endLine} 마지막 교전 우리 팀 승리 확률은 ${(m.a===g.teamId?lastTf.prob:100-lastTf.prob).toFixed(1)}%였습니다. 확률이 승리를 보장하지는 않습니다.`,`이 세트 POG ${ws[pogSlot].name}(${ROLES[pogSlot]}) — ${whyPog.join(', ')}. 승리 팀 5인의 실제 사건 기여를 합산해 뽑았습니다.`]};
 }
 function finishMatch(g:Game,m:Match){m.winner=m.scoreA>m.scoreB?m.a:m.b;const a=team(g,m.a),b=team(g,m.b);if(g.stage==='REGULAR'){a.sw+=m.scoreA;a.sl+=m.scoreB;b.sw+=m.scoreB;b.sl+=m.scoreA;(m.winner===m.a?a:b).wins++;(m.winner===m.a?b:a).losses++;}for(const t of [a,b]){for(const p of g.players.filter(p=>new Set(m.sets.flatMap(s=>t.id===m.a?s.lineupA:s.lineupB)).has(p.id))){p.burn=clamp(p.burn+4);p.form=clamp(p.form+(t.id===m.winner?2:-2));}t.familiarity[key(t)]=clamp((t.familiarity[key(t)]??20)+1,20,100);}
- for(const set of m.sets){const p=g.players.find(p=>p.id===set.pog);if(p)p.pog++;}
+ for(const set of m.sets){const p=g.players.find(p=>p.id===set.pog);if(p)p.pog++;
+  for(const e of set.events){const cb=e.combat;if(!cb)continue;for(const k of cb.kills){
+   const kp=g.players.find(x=>x.id===(k.killer.side==='A'?set.lineupA:set.lineupB)[k.killer.slot]);if(kp)kp.kills=(kp.kills??0)+1;
+   const vp=g.players.find(x=>x.id===(k.victim.side==='A'?set.lineupA:set.lineupB)[k.victim.slot]);if(vp)vp.deaths=(vp.deaths??0)+1;
+   for(const as of k.assists){const ap=g.players.find(x=>x.id===(as.side==='A'?set.lineupA:set.lineupB)[as.slot]);if(ap)ap.assists=(ap.assists??0)+1;}
+  }}
+ }
  for(const s of m.sets)for(const A of [true,false]){const tid=A?m.a:m.b,picks=A?s.draft.picksA:s.draft.picksB,lineup=A?s.lineupA:s.lineupB,won=m.winner===tid,coach=team(g,tid).staff?.coach??0;for(let i=0;i<5;i++){const pl=g.players.find(x=>x.id===lineup[i]);if(!pl||pl.id.startsWith('emergency')||!picks[i])continue;gainMastery(pl,picks[i],Math.round((4+(won?2:0)+(s.pog===pl.id?3:0))*(1+coach*.1)));}}
  g.history.unshift({id:m.id,a:m.a,b:m.b,sa:m.scoreA,sb:m.scoreB,winner:m.winner,label:m.label,season:g.season});g.history=g.history.slice(0,400);}
 function autoMatch(g:Game,m:Match){ensureLineup(g,m.a);ensureLineup(g,m.b);while(Math.max(m.scoreA,m.scoreB)<Math.floor(m.bestOf/2)+1){const s=simulateSet(g,m);m.sets.push(s);s.winner===m.a?m.scoreA++:m.scoreB++;}finishMatch(g,m);m.sets=[];}

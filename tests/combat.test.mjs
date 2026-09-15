@@ -255,6 +255,42 @@ const CRNG=()=>random(hash('obj-test'));
  assert.ok(sawTeamBountyWhenSecured,'확보 사건엔 팀 보상 패턴이 존재(대조)');
 }
 
+// --- 8c. F10: 오브젝트를 포기해도 실제 대안 이득(사이드 웨이브)이 있다 — 오브젝트 보상과는 별개 채널.
+{
+ // 확보한 쪽은 그대로, 확보하지 못한 쪽(B)만 탑 웨이브가 오른다. 동시에 B는 여전히 오브젝트
+ // 5칸 팀 보상은 받지 않는다(8b가 이미 확인한 채널과 분리돼 있어야 함 — 이중 지급 아님).
+ const st=mkState(s=>{s.clock=660;});
+ const ce=resolveObjective(st,3,'herald',true,0.5,660,random(hash('f10-secure')));
+ assert.equal(ce.objective.secured,'A','통제 상태에서 A가 확보(대조 기준)');
+ assert.ok(st.wave.B[0]>0,`확보 실패한 B는 탑 웨이브를 얻는다: ${st.wave.B[0]}`);
+ assert.equal(st.wave.A[0],0,'확보한 A는 이 웨이브 보너스를 받지 않는다(이미 오브젝트 보상을 받았음)');
+ // resource는 A 관점 5칸 차이값(res_A−res_B)이다 — B가 5칸 팀 보상을 받았다면 전 슬롯이 크게
+ // 음수(B 우세)로 쏠렸을 것. A가 확보했으므로 그 패턴이 없어야 한다(채널 분리, B 이중 지급 아님).
+ assert.ok(![0,1,2,3,4].every(sl=>ce.resource[sl]<=-25),'확보 못 한 B가 오브젝트 5칸 팀 보상을 받은 패턴은 없다(채널 분리, 이중 지급 아님)');
+
+ // 둘 다 확보 못 하면(합류 인원 부족) 둘 다 그 시간을 라인에 쓴 것으로 본다 — 양쪽 다 웨이브 증가.
+ const st2=mkState(s=>{
+  s.clock=660;
+  for(const sl of [1,2,4]){ s.A[sl].alive=false; s.A[sl].respawnAt=99999; } // A: 정글·미드·서포터 이탈(탑은 생존)
+  for(const sl of [1,2,4]){ s.B[sl].alive=false; s.B[sl].respawnAt=99999; } // B도 동일
+ });
+ const ce2=resolveObjective(st2,3,'herald',true,0.5,660,random(hash('f10-cancel')));
+ assert.equal(ce2.objective.secured,null,'양쪽 다 합류 부족 → 시도 취소(통제 조건)');
+ assert.ok(st2.wave.A[0]>0&&st2.wave.B[0]>0,`둘 다 확보 못 하면 둘 다 웨이브 증가: A=${st2.wave.A[0]} B=${st2.wave.B[0]}`);
+
+ // 엣지 케이스: 웨이브 혜택을 받을 자격이 있어도 탑 라이너가 죽어 있으면 못 받는다(순간이동 없음).
+ const st3=mkState(s=>{
+  s.clock=660;
+  s.A[0].alive=false; s.A[0].respawnAt=99999; // A 탑 사망
+  for(const sl of [1,2,4]){ s.A[sl].alive=false; s.A[sl].respawnAt=99999; }
+  for(const sl of [1,2,4]){ s.B[sl].alive=false; s.B[sl].respawnAt=99999; }
+ });
+ const ce3=resolveObjective(st3,3,'herald',true,0.5,660,random(hash('f10-dead-top')));
+ assert.equal(ce3.objective.secured,null,'통제 조건 재확인(취소)');
+ assert.equal(st3.wave.A[0],0,'탑 라이너가 죽어 있으면 웨이브 혜택도 못 받는다(자격은 있어도 실행 불가)');
+ assert.ok(st3.wave.B[0]>0,'B는 탑이 살아있어 정상적으로 웨이브를 받는다(대조)');
+}
+
 // --- 9. 단위 4: 참여자 기반 한타(resolveTeamfight) — 구성 상태 고정 검증 ---
 {
  const kill=(st,side,slots)=>{for(const sl of slots){st[side][sl].alive=false;st[side][sl].deaths++;st[side][sl].respawnAt=99999;}};

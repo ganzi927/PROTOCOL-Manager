@@ -413,6 +413,14 @@ export function resolveObjective(
   // 만료 = 세트 종료(MatchState 재생성). 한타 구간(i>=5)에선 아무도 읽지 않음. 다른 kind 확보로는 해제되지 않는다.
   st.pendingObjective=kind;
  }
+ // F10: "포기에도 실제 자원·구조물 이득이 있을 수 있게 한다" — 오브젝트를 확보하지 못한 쪽(둘 다
+ // 못 챙겼으면 둘 다)은 그 시간을 라인(탑 기준)에 썼다고 보고 웨이브가 쌓인다. 오브젝트 팀 보상
+ // (OBJ_TEAM_G)과는 다른 채널이라 "미확보인데 보상 받음"과 모순되지 않는다 — 오브젝트 자체의
+ // 보상은 여전히 0이고, 별개로 라인 웨이브만 오른다.
+ for(const s of ['A','B'] as Side[]) if(s!==secured && st[s][0].alive){
+  st.wave[s][0]=clampN(st.wave[s][0]+0.5,0,4);
+  ev.push(`${s} 측은 ${objKor} 대신 그 시간을 라인에 씀 — 사이드 웨이브 확보`);
+ }
 
  const resource=[0,1,2,3,4].map(s=>res[s]-res[5+s]);
  const participants:Ref[]=[

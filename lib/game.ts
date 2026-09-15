@@ -45,7 +45,11 @@ export type RecordMatch={id:string,a:string,b:string,sa:number,sb:number,winner:
 // "다음 상대 준비"에 실제 쓰이는 요약값만 남긴다(저장 용량 무한 증가 방지, 팀당 최근 SCOUT_CAP개만 보존).
 export type SetScout={season:number,picks:string[],oppPicks:string[],won:boolean,endReason?:'NEXUS'|'CAP_TIME'|'CAP_EVENT',tookFirstStruct:boolean,objSecured:number,objTotal:number,leadSlots:number[],pogRole?:string};
 export const SCOUT_CAP=15;
-export type Game={version:number,seed:number,season:number,split:'SPRING'|'SUMMER',round:number,stage:'REGULAR'|'PLAYOFF'|'INTERNATIONAL',phase:'PLAN'|'PREP'|'DRAFT'|'TACTICAL'|'RECAP'|'MATCH_END'|'SPLIT_END'|'OFFSEASON'|'WORLD_END',teamId:string,players:Player[],teams:Team[],fixtures:string[][][],match:Match|null,history:RecordMatch[],scout?:Record<string,SetScout[]>,news:string[],hall:{season:number,split:string,champion:string,rank:number}[],po:Match[],poSeeds:string[],champion:string|null,trained:boolean,offWeek:number,ledger:{label:string,amount:number}[],planNotice:string[],meta:string[],international?:International,settledWeeks?:number,sandbox?:boolean};
+// F17: 훈련 이력. 선수/조합(특훈이면 챔피언)/날짜(시즌·라운드)/강도(훈련 종류)/효과(실제 적용된 수치)를 남긴다
+// — 사용자 팀만 기록한다(planNotice와 같은 범위). 팀당 최근 TRAINING_LOG_CAP개만 보존.
+export type TrainingLogEntry={season:number,round:number,playerId:string,training:string,champ?:string,effect:string};
+export const TRAINING_LOG_CAP=60;
+export type Game={version:number,seed:number,season:number,split:'SPRING'|'SUMMER',round:number,stage:'REGULAR'|'PLAYOFF'|'INTERNATIONAL',phase:'PLAN'|'PREP'|'DRAFT'|'TACTICAL'|'RECAP'|'MATCH_END'|'SPLIT_END'|'OFFSEASON'|'WORLD_END',teamId:string,players:Player[],teams:Team[],fixtures:string[][][],match:Match|null,history:RecordMatch[],scout?:Record<string,SetScout[]>,trainingLog?:TrainingLogEntry[],news:string[],hall:{season:number,split:string,champion:string,rank:number}[],po:Match[],poSeeds:string[],champion:string|null,trained:boolean,offWeek:number,ledger:{label:string,amount:number}[],planNotice:string[],meta:string[],international?:International,settledWeeks?:number,sandbox?:boolean};
 export type Command={type:string,payload?:Record<string,unknown>};
 export const clamp=(v:number,a=0,b=100)=>Math.min(b,Math.max(a,v));
 export const avg=(ns:number[])=>ns.reduce((a,b)=>a+b,0)/(ns.length||1);
@@ -112,18 +116,20 @@ function news(g:Game,s:string){g.news.unshift(s);g.news=g.news.slice(0,30);}
 function pay(g:Game,t:Team,v:number,label:string){t.cash+=v;if(t.id===g.teamId){g.ledger.unshift({label,amount:v});g.ledger=g.ledger.slice(0,30);}}
 function ensureLineup(g:Game,id:string){const t=team(g,id);for(const r of ROLES){const current=g.players.find(p=>p.id===t.lineup[r]&&p.teamId===id);if(!current||current.burn>=90){const options=roster(g,id).filter(p=>p.role===r&&p.burn<90).sort((a,b)=>ovr(b)-ovr(a));if(options.length)t.lineup[r]=options[0].id;else{let p=g.players.find(p=>p.id===`emergency-${id}-${r}`);if(!p){p=makePlayer(99,r,id,35,g.season,random(hash(id+r)));p.id=`emergency-${id}-${r}`;p.name='긴급 '+r;p.salary=0;g.players.push(p);}p.burn=0;t.lineup[r]=p.id;pay(g,t,-200,'긴급 선수 수당');if(id===g.teamId)news(g,`${r} 출전 선수가 없어 긴급 선수를 호출했습니다. (0.02억)`);}}}}
 function train(g:Game){g.planNotice=[];for(const t of g.teams){for(const p of roster(g,t.id)){if(p.id.startsWith('emergency'))continue;if(t.id!==g.teamId)p.training=p.burn>45?'rest':synergy(g,t.id)<70?'scrim':'practice';const tr=TRAININGS.find(x=>x.id===p.training)!;p.burn=clamp(p.burn+tr.burn-(tr.id==='rest'?(t.staff?.psych??0)*3:0));p.form=clamp(50+.85*(p.form-50)+(tr.id==='rest'?3:0));p.growth=0;const idx=tr.id==='practice'?[0,4]:tr.id==='scrim'?[1,2,3]:[];for(const s of idx){const d=Math.max(0,Math.min(p.pot[s]-p.stats[s],1.5*(1+(t.staff?.coach??0)*.1)/idx.length*Math.pow(Math.max(0,1-p.stats[s]/p.pot[s]),1.2)));p.stats[s]=Math.round((p.stats[s]+d)*100)/100;p.growth+=d;}
+ // F17: 훈련 이력 — 사용자 팀만(planNotice와 같은 범위), 실제 적용된 효과 문구를 그대로 구조화해 영구 보존.
+ const logT=(effect:string,champ?:string)=>{if(t.id!==g.teamId)return;if(!g.trainingLog)g.trainingLog=[];g.trainingLog.unshift({season:g.season,round:g.round,playerId:p.id,training:tr.id,champ,effect});g.trainingLog=g.trainingLog.slice(0,TRAINING_LOG_CAP);};
  if(tr.id==='champ'){
   // 사용자가 고른 목표를 그대로 훈련한다. 미등록 챔피언은 풀에 자리가 있으면 새로 등록하고,
   // 풀(8칸)이 가득 차면 다른 챔피언으로 조용히 대체하지 않고 보류를 알린다.
   const wanted=p.trainChamp&&CHAMPIONS.some(c=>c.id===p.trainChamp)?p.trainChamp:undefined;
   if(wanted&&!p.mastery.some(m=>m.champ===wanted)&&p.mastery.length>=MASTERY_POOL){
-   if(t.id===g.teamId)g.planNotice.push(`${p.name} · 챔피언 특훈 보류 · 숙련 챔피언 ${MASTERY_POOL}칸이 가득 차 ${champName(wanted)}을(를) 등록하지 못했습니다 · 번아웃 ${Math.round(p.burn)}`);
+   if(t.id===g.teamId){g.planNotice.push(`${p.name} · 챔피언 특훈 보류 · 숙련 챔피언 ${MASTERY_POOL}칸이 가득 차 ${champName(wanted)}을(를) 등록하지 못했습니다 · 번아웃 ${Math.round(p.burn)}`);logT(`보류 · 숙련 ${MASTERY_POOL}칸 가득 참`,wanted);}
   }else{
    const target=wanted??[...p.mastery].sort((a,b)=>(a.level-b.level)||(a.xp-b.xp))[0]?.champ;
-   if(target){const gain=Math.round(28*(1+(t.staff?.coach??0)*.1));gainMastery(p,target,gain);if(t.id===g.teamId)g.planNotice.push(`${p.name} · 챔피언 특훈 · ${champName(target)} 숙련 +${gain} · 번아웃 ${Math.round(p.burn)}`);}
+   if(target){const gain=Math.round(28*(1+(t.staff?.coach??0)*.1));gainMastery(p,target,gain);if(t.id===g.teamId){g.planNotice.push(`${p.name} · 챔피언 특훈 · ${champName(target)} 숙련 +${gain} · 번아웃 ${Math.round(p.burn)}`);logT(`숙련 +${gain}`,target);}}
   }
  }
- else if(t.id===g.teamId)g.planNotice.push(`${p.name} · ${tr.name} · ${idx.length?'성장 +'+p.growth.toFixed(2):'폼 '+Math.round(p.form)} · 번아웃 ${Math.round(p.burn)}`);}
+ else if(t.id===g.teamId){const eff=idx.length?'성장 +'+p.growth.toFixed(2):'폼 '+Math.round(p.form);g.planNotice.push(`${p.name} · ${tr.name} · ${eff} · 번아웃 ${Math.round(p.burn)}`);logT(eff);}}
  const k=key(t);for(const x in t.familiarity)t.familiarity[x]=clamp(t.familiarity[x]-1,20,100);t.familiarity[k]=clamp((t.familiarity[k]??20)+(starters(g,t.id).filter(p=>p.training==='scrim').length>=3?4:0),20,100);ensureLineup(g,t.id);}
  g.trained=true;g.phase='PREP';loadMatch(g);news(g,`${g.split==='SPRING'?'스프링':'서머'} ${Math.floor(g.round/2)+1}주차 훈련 완료`);}
 export function upcoming(g:Game){return g.match??(g.stage==='REGULAR'&&g.fixtures[g.round]?(()=>{const [a,b]=g.fixtures[g.round].find(p=>p.includes(g.teamId))!;return {id:`${g.season}-${g.split}-${g.round}-${a}`,a,b,bestOf:3,scoreA:0,scoreB:0,sets:[],label:`${g.split} R${g.round+1}`} as Match;})():null);}

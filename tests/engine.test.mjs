@@ -14,6 +14,15 @@ function next(g){if(g.phase==='PLAN'){g=applyCommand(g,{type:'training',payload:
   const a=simulateSet(g,g.match),b=simulateSet(g,g.match);assert.deepEqual(a,b);assert.ok(a.events.length<=62) /* 단위 5: 9구간 스켈레톤 뒤 공성·연장 운영 사건이 붙는다(요구 변경, EVENT_CAP=60 + 종료) */;assert.ok([g.match.a,g.match.b].includes(a.winner));
   assert.ok(a.events.every(e=>Number.isFinite(e.goldA)&&Number.isFinite(e.goldB)&&typeof e.detail==='string'&&e.detail.length>0));
   sets++;return applyCommand(g,{type:'play'});}
+ if(g.phase==='TACTICAL'){const m=g.match,preview=m.tacticalState.previewEvents;assert.equal(preview.length,3,'라인전 3사건 미리보기');
+  const setsBefore=m.sets.length;
+  const choices=['prepare','trade','regroup'];const choice=choices[setsBefore%3];
+  const n=applyCommand(g,{type:'tacticalChoice',payload:{choice}});
+  assert.equal(n.phase,'RECAP','작전 지시 후 리캡으로 전환');
+  assert.equal(n.match.sets.length,setsBefore+1,'세트가 커밋됨');
+  const committed=n.match.sets.at(-1);
+  assert.deepEqual(committed.events.slice(0,3),preview,'라인전 사건은 지시 전 미리보기와 동일(과거 불변)');
+  return n;}
  if(g.phase==='RECAP')return applyCommand(g,{type:'continue'});if(g.phase==='MATCH_END')return applyCommand(g,{type:'advance'});if(g.phase==='SPLIT_END'){assert.equal(g.po.length,8);return applyCommand(g,{type:'nextSplit'});}if(g.phase==='WORLD_END'){const cup=g.international;assert.ok(cup.champion);if(cup.kind==='WORLD'){assert.equal(cup.table.filter(r=>r.wins===3).length,8);assert.ok(cup.table.every(r=>r.wins===3||r.losses===3));assert.equal(new Set(cup.participants).size,16);assert.ok(cup.matches.length>=35);}return applyCommand(g,{type:'nextCompetition'});}if(g.phase==='OFFSEASON'){for(const r of ROLES){let p=roster(g).filter(p=>p.role===r).sort((a,b)=>ovr(b)-ovr(a))[0];if(!p){const fa=g.players.filter(p=>!p.teamId&&p.role===r&&p.releasedSeason!==g.season).sort((a,b)=>a.salary-b.salary)[0];assert.ok(fa);g=applyCommand(g,{type:'sign',payload:{id:fa.id,years:1}});p=fa;}g=applyCommand(g,{type:'lineup',payload:{id:p.id}});}return applyCommand(g,{type:'newSeason'});}throw Error(g.phase);}
 const mSum=p=>p.mastery.reduce((a,m)=>a+m.level*100+m.xp,0);
 for(const tid of ['nva','crn','rse']){let g=newGame(tid,42);assert.ok(payroll(g)<=250000);const hero=g.players.find(p=>p.teamId===tid),h0=mSum(hero);let commands=0;while(g.season<5){g=next(g);commands++;assert.ok(commands<5000);for(const t of g.teams){assert.ok(Number.isFinite(t.cash));assert.ok(t.wins>=0);}for(const p of g.players)for(const m of p.mastery){assert.ok(m.level>=0&&m.level<=4);assert.ok(m.xp>=0&&m.xp<100);}}

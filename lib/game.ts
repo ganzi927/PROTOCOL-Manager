@@ -37,9 +37,11 @@ export type DraftState={blue:string,red:string,step:number,bans:{side:'B'|'R',ch
 export type GameEvent={index:number,phase:string,title:string,winner:string,edge?:string,prob:number,advantage:number,powerA:number,powerB:number,goldA:number,goldB:number,detail:string,leadA?:number,resPowA?:number,compA?:number,beats?:Beat[],tier?:Tier,kills?:{a:number,b:number},combat?:CombatEvent};
 export type CapDiag={reason:'TIME'|'EVENT',clock:number,events:number,structDealt:[number,number],baseTurrets:[number,number],inhibsOpen:[number,number],recentSiegeFails:string[],tiebreakStage:'struct'|'pressure'|'advantage'|'coin'};
 export type SetResult={winner:string,endReason?:'NEXUS'|'CAP_TIME'|'CAP_EVENT',capDiag?:CapDiag,events:GameEvent[],draft:Draft,recap:string[],pog:string,pogReason?:string,powersA:number[],powersB:number[],lineupA:string[],lineupB:string[],leadA?:number[],draftFx?:{lane:number,obj:number,fight:number}};
-export type Match={id:string,a:string,b:string,bestOf:number,scoreA:number,scoreB:number,sets:SetResult[],winner?:string,draft?:Draft,draftState?:DraftState,label:string};
+export type TacticalChoice='prepare'|'trade'|'regroup';
+export type TacticalState={previewEvents:GameEvent[]};
+export type Match={id:string,a:string,b:string,bestOf:number,scoreA:number,scoreB:number,sets:SetResult[],winner?:string,draft?:Draft,draftState?:DraftState,tacticalState?:TacticalState,label:string};
 export type RecordMatch={id:string,a:string,b:string,sa:number,sb:number,winner:string,label:string,season:number};
-export type Game={version:number,seed:number,season:number,split:'SPRING'|'SUMMER',round:number,stage:'REGULAR'|'PLAYOFF'|'INTERNATIONAL',phase:'PLAN'|'PREP'|'DRAFT'|'RECAP'|'MATCH_END'|'SPLIT_END'|'OFFSEASON'|'WORLD_END',teamId:string,players:Player[],teams:Team[],fixtures:string[][][],match:Match|null,history:RecordMatch[],news:string[],hall:{season:number,split:string,champion:string,rank:number}[],po:Match[],poSeeds:string[],champion:string|null,trained:boolean,offWeek:number,ledger:{label:string,amount:number}[],planNotice:string[],meta:string[],international?:International,settledWeeks?:number,sandbox?:boolean};
+export type Game={version:number,seed:number,season:number,split:'SPRING'|'SUMMER',round:number,stage:'REGULAR'|'PLAYOFF'|'INTERNATIONAL',phase:'PLAN'|'PREP'|'DRAFT'|'TACTICAL'|'RECAP'|'MATCH_END'|'SPLIT_END'|'OFFSEASON'|'WORLD_END',teamId:string,players:Player[],teams:Team[],fixtures:string[][][],match:Match|null,history:RecordMatch[],news:string[],hall:{season:number,split:string,champion:string,rank:number}[],po:Match[],poSeeds:string[],champion:string|null,trained:boolean,offWeek:number,ledger:{label:string,amount:number}[],planNotice:string[],meta:string[],international?:International,settledWeeks?:number,sandbox?:boolean};
 export type Command={type:string,payload?:Record<string,unknown>};
 export const clamp=(v:number,a=0,b=100)=>Math.min(b,Math.max(a,v));
 export const avg=(ns:number[])=>ns.reduce((a,b)=>a+b,0)/(ns.length||1);
@@ -220,7 +222,7 @@ const RES_VIS_W=[1,1.35,1,1,1.5];       // 시야 가중(정글·서포터 우�
 const RES_VIS_PROTECT=2.6;    // 가중 시야 우위 1점당 슬롯별 자원 보호치(피습·불리한 진입 감소)
 const RES_CAR_W=[0.12,0.1,0.32,0.36,0.1]; // 자원→피해 전환 주체(미드·원딜 중심)
 const RES_DEAD=42,RES_CAP=165,RES_SCALE=150,RES_OBJ=3.0,RES_FIGHT=4.6; // 자원→유효 전력 포화 곡선(데드존·총량 상한·스케일·오브젝트/한타 상한)
-export function simulateSet(g:Game,m:Match):SetResult{
+export function simulateSet(g:Game,m:Match,directive?:TacticalChoice):SetResult{
  const draft=m.draft??pickDraft(g,m),rng=random(hash(`${g.seed}|outcome|${m.id}|${m.sets.length}`));
  const de=draftEffects(draft.picksA,draft.picksB); // 조합 효과(A 관점, 결정적). 라인/오브젝트/한타에 각각 1회 가산.
  // flavor: 표시용 팀 골드 곡선 전용 난수(F03 감사, 2026-09-15). GoldGraph의 e.goldA/goldB는 이 스트림으로
@@ -277,6 +279,16 @@ export function simulateSet(g:Game,m:Match):SetResult{
  const lead=[0,0,0,0,0]; // 슬롯별 자원(+ = A 우세)
  let advantage=0,pressureA=0,pressureB=0,winner='',laneResults:number[]=[];const events:GameEvent[]=[];
  const labels=['탑 라인전','미드 라인전','바텀 라인전','전령 교전','드래곤 교전','중반 교전','후반 교전','마지막 진격','기지 결전'];
+ // F04(2026-09-15): 오브젝트 준비 구간 감독 지시. 조합 효과(±3, composition.ts)보다 작게 잡아
+ // 지배적 레버가 되지 않도록 한다. '정비'(directive 없음/'regroup')는 완전 중립 — 기존 simulateSet(g,m)
+ // 호출(autoMatch·회귀 테스트 전부)과 동일 결과를 보장해야 한다. 사용자 팀 관점으로만 부호를 맞춘다.
+ const TACTICAL_BONUS=1.2;
+ const tacticalAccess=(phase:number)=>{
+  if(!directive||directive==='regroup'||nUserIsA===null)return 0;
+  const forThisPhase=(directive==='prepare'&&phase===4)||(directive==='trade'&&phase===3);
+  if(!forThisPhase)return 0;
+  return nUserIsA?TACTICAL_BONUS:-TACTICAL_BONUS;
+ };
  const CLOCK_CAP=3600, EVENT_CAP=60;      // 무한 실행 방지 상한(경기 시계 초 / 사건 수). 도달은 정상 넥서스 승리와 구분해 기록.
  let ei=0;                               // GameEvent.index (스켈레톤 0..8, 이후 공성·연장 사건이 이어 붙는다)
  let endReason:'NEXUS'|'CAP_TIME'|'CAP_EVENT'='CAP_EVENT';
@@ -321,7 +333,7 @@ export function simulateSet(g:Game,m:Match):SetResult{
  let nexusDown=false;
  for(let i=0;i<9&&!nexusDown;i++){
   const phase=i<3?i:i<5?3:4;
-  const access=i===3?avg(laneResults.slice(0,2))*.5:i===4?avg(laneResults.slice(1))*.5:0;
+  const access=(i===3?avg(laneResults.slice(0,2))*.5:i===4?avg(laneResults.slice(1))*.5:0)+tacticalAccess(phase);
   const r=rollFight(phase,access);
   let cb:CombatEvent, waIn=r.edgeA;
   if(i<3){
@@ -349,7 +361,7 @@ export function simulateSet(g:Game,m:Match):SetResult{
  }
  // 연장전: 9번째 사건이라는 이유로 승자를 정하지 않는다. 넥서스가 아직이면 운영·교전·공성을 이어간다.
  while(!nexusDown&&cs.clock<CLOCK_CAP&&ei<EVENT_CAP-1){
-  const r=rollFight(4,0);
+  const r=rollFight(4,tacticalAccess(4));
   cs.clock+=28;
   const node=battlefield(9),cb=withMovement(()=>resolveTeamfight(cs,9,r.edgeA,r.margin,cs.clock,crng,node),node);
   for(let s=0;s<5;s++)lead[s]+=cb.resource[s];
@@ -491,7 +503,15 @@ export function applyCommand(source:Game,cmd:Command):Game{const g=upgradeGame(s
  case 'draftPick':{requirePhase(g,['DRAFT']);const m=g.match!,ds=m.draftState;if(!ds||ds.complete)throw Error('밴픽이 이미 끝났습니다.');if(draftTurnTeam(ds)!==g.teamId)throw Error('지금은 상대 팀 차례입니다.');const champ=String(p.champ);if(!legalDraftCandidates(g,ds).some(c=>c.id===champ))throw Error('지금 선택할 수 없는 챔피언입니다.');applyDraftStep(ds,champ);advanceDraft(g,m,ds);break;}
  case 'draftReset':{requirePhase(g,['DRAFT']);const m=g.match!;m.draft=undefined;m.draftState=newDraftState(g,m);advanceDraft(g,m,m.draftState);break;}
  case 'draftSwap':{requirePhase(g,['DRAFT']);const m=g.match!,ds=m.draftState;if(!ds?.complete)throw Error('밴픽을 먼저 완료해 주세요.');const from=Number(p.from),to=Number(p.to);if(![from,to].every(n=>Number.isInteger(n)&&n>=0&&n<5)||from===to)throw Error('스왑 위치를 확인해 주세요.');const picks=draftPicksOf(ds,g.teamId),rf=ROLES[from],rt=ROLES[to],pf=picks.find(x=>x.role===rf),pt=picks.find(x=>x.role===rt);if(!pf||!pt)throw Error('스왑할 픽을 찾지 못했습니다.');pf.role=rt;pt.role=rf;m.draft=draftToResult(m,ds);break;}
- case 'play':{requirePhase(g,['DRAFT']);const m=g.match!;if(!m.draftState?.complete&&!m.draft)throw Error('밴픽을 먼저 완료해 주세요.');const r=simulateSet(g,m);m.sets.push(r);r.winner===m.a?m.scoreA++:m.scoreB++;m.draft=undefined;m.draftState=undefined;g.phase='RECAP';break;}
+ // F04: 'play'는 이제 즉시 세트를 끝내지 않는다 — 라인전 3사건(중립 directive로 미리보기 계산, 이후 실제
+ // 계산과 반드시 동일해야 하므로 'tacticalChoice'에서 앞 3사건을 검증한다)까지 보여주고 오브젝트 준비 구간
+ // 감독 지시를 기다린다. 기존 일괄 계산(simulateSet(g,m))은 directive 생략 시 완전히 동일하게 동작한다
+ // (autoMatch·회귀 테스트는 이 경로를 그대로 쓴다 — 호환 경로 보존).
+ case 'play':{requirePhase(g,['DRAFT']);const m=g.match!;if(!m.draftState?.complete&&!m.draft)throw Error('밴픽을 먼저 완료해 주세요.');const preview=simulateSet(g,m);m.tacticalState={previewEvents:preview.events.slice(0,3)};g.phase='TACTICAL';break;}
+ case 'tacticalChoice':{requirePhase(g,['TACTICAL']);const m=g.match!;const ts=m.tacticalState;if(!ts)throw Error('작전 지시를 진행할 세트가 없습니다.');const choice=String(p.choice);if(!['prepare','trade','regroup'].includes(choice))throw Error('작전 지시를 확인해 주세요.');
+  const r=simulateSet(g,m,choice as TacticalChoice);
+  if(JSON.stringify(r.events.slice(0,3))!==JSON.stringify(ts.previewEvents))throw Error('라인전 결과가 미리보기와 달라 진행할 수 없습니다. 다시 시도해 주세요.'); // 결정성 안전장치 — 정상 동작에서는 항상 통과한다
+  m.sets.push(r);r.winner===m.a?m.scoreA++:m.scoreB++;m.draft=undefined;m.draftState=undefined;m.tacticalState=undefined;g.phase='RECAP';break;}
  case 'continue':{requirePhase(g,['RECAP']);const m=g.match!;if(Math.max(m.scoreA,m.scoreB)>=Math.floor(m.bestOf/2)+1){finishMatch(g,m);g.phase='MATCH_END';news(g,`${meta(m.a).short} ${m.scoreA}:${m.scoreB} ${meta(m.b).short} · ${m.winner===g.teamId?'승리':'패배'}`);}else g.phase='PREP';break;}
  case 'advance':requirePhase(g,['MATCH_END']);if(g.stage==='REGULAR')regularNext(g);else if(g.stage==='INTERNATIONAL'){recordInternational(g,g.match!);g.match=null;nextInternational(g);}else{g.po.push(g.match!);g.match=null;nextPO(g);}break;
  case 'nextSplit':requirePhase(g,['SPLIT_END']);startInternational(g,g.split==='SPRING'?'MIDSEASON':'WORLD');break;

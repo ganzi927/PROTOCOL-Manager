@@ -1,4 +1,4 @@
-> 2026-09-15 최신: `docs/claude/PROTOCOL-Claude-Development-Orders.md`(F01~F27)를 순서대로 진행 중. 실제 완료/검증 기록은 `docs/claude/DEVELOPMENT_ORDERS_PROGRESS.md`를 먼저 읽을 것 — 이 파일의 아래 옛 기록보다 우선한다. 완료 항목 재구현 금지.
+> 2026-09-15 최신: `docs/claude/PROTOCOL-Claude-Development-Orders.md`(F01~F27)를 순서대로 진행 중 — F01~F04 완료(F02는 모바일 픽셀 인수만 도구 제약 BLOCKED). 실제 완료/검증 기록은 `docs/claude/DEVELOPMENT_ORDERS_PROGRESS.md`를 먼저 읽을 것 — 이 파일의 아래 옛 기록보다 우선한다. F04에서 `Game.phase`에 `'TACTICAL'`이 추가되고 `case 'play'`의 동작이 바뀌었다(이제 즉시 세트를 끝내지 않고 라인전 미리보기 후 감독 지시를 기다린다) — 다음 세션은 이 변경을 재구현하지 말 것. 완료 항목 재구현 금지.
 
 > 최신 후속: `BROADCAST_CONTINUATION.md` 우선. 현재 KDA·역할 진형·키프레임 상태 시각·완료 사건 공개·재생 제어 수정. Git 작업 없음.
 

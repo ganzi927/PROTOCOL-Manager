@@ -41,7 +41,11 @@ export type TacticalChoice='prepare'|'trade'|'regroup'|'protect'|'allin';
 export type TacticalState={previewEvents:GameEvent[]};
 export type Match={id:string,a:string,b:string,bestOf:number,scoreA:number,scoreB:number,sets:SetResult[],winner?:string,draft?:Draft,draftState?:DraftState,tacticalState?:TacticalState,label:string};
 export type RecordMatch={id:string,a:string,b:string,sa:number,sb:number,winner:string,label:string,season:number};
-export type Game={version:number,seed:number,season:number,split:'SPRING'|'SUMMER',round:number,stage:'REGULAR'|'PLAYOFF'|'INTERNATIONAL',phase:'PLAN'|'PREP'|'DRAFT'|'TACTICAL'|'RECAP'|'MATCH_END'|'SPLIT_END'|'OFFSEASON'|'WORLD_END',teamId:string,players:Player[],teams:Team[],fixtures:string[][][],match:Match|null,history:RecordMatch[],news:string[],hall:{season:number,split:string,champion:string,rank:number}[],po:Match[],poSeeds:string[],champion:string|null,trained:boolean,offWeek:number,ledger:{label:string,amount:number}[],planNotice:string[],meta:string[],international?:International,settledWeeks?:number,sandbox?:boolean};
+// F16: 스카우팅 표본. 세트 하나당 한 팀 관점으로 하나 — 원본 사건(events/recap) 전체가 아니라
+// "다음 상대 준비"에 실제 쓰이는 요약값만 남긴다(저장 용량 무한 증가 방지, 팀당 최근 SCOUT_CAP개만 보존).
+export type SetScout={season:number,picks:string[],oppPicks:string[],won:boolean,endReason?:'NEXUS'|'CAP_TIME'|'CAP_EVENT',tookFirstStruct:boolean,objSecured:number,objTotal:number,leadSlots:number[],pogRole?:string};
+export const SCOUT_CAP=15;
+export type Game={version:number,seed:number,season:number,split:'SPRING'|'SUMMER',round:number,stage:'REGULAR'|'PLAYOFF'|'INTERNATIONAL',phase:'PLAN'|'PREP'|'DRAFT'|'TACTICAL'|'RECAP'|'MATCH_END'|'SPLIT_END'|'OFFSEASON'|'WORLD_END',teamId:string,players:Player[],teams:Team[],fixtures:string[][][],match:Match|null,history:RecordMatch[],scout?:Record<string,SetScout[]>,news:string[],hall:{season:number,split:string,champion:string,rank:number}[],po:Match[],poSeeds:string[],champion:string|null,trained:boolean,offWeek:number,ledger:{label:string,amount:number}[],planNotice:string[],meta:string[],international?:International,settledWeeks?:number,sandbox?:boolean};
 export type Command={type:string,payload?:Record<string,unknown>};
 export const clamp=(v:number,a=0,b=100)=>Math.min(b,Math.max(a,v));
 export const avg=(ns:number[])=>ns.reduce((a,b)=>a+b,0)/(ns.length||1);
@@ -555,7 +559,63 @@ function finishMatch(g:Game,m:Match){m.winner=m.scoreA>m.scoreB?m.a:m.b;const a=
   }}
  }
  for(const s of m.sets)for(const A of [true,false]){const tid=A?m.a:m.b,picks=A?s.draft.picksA:s.draft.picksB,lineup=A?s.lineupA:s.lineupB,won=m.winner===tid,coach=team(g,tid).staff?.coach??0;for(let i=0;i<5;i++){const pl=g.players.find(x=>x.id===lineup[i]);if(!pl||pl.id.startsWith('emergency')||!picks[i])continue;gainMastery(pl,picks[i],Math.round((4+(won?2:0)+(s.pog===pl.id?3:0))*(1+coach*.1)));}}
- g.history.unshift({id:m.id,a:m.a,b:m.b,sa:m.scoreA,sb:m.scoreB,winner:m.winner,label:m.label,season:g.season});g.history=g.history.slice(0,400);}
+ g.history.unshift({id:m.id,a:m.a,b:m.b,sa:m.scoreA,sb:m.scoreB,winner:m.winner,label:m.label,season:g.season});g.history=g.history.slice(0,400);
+ // F16: 세트마다 양 팀 관점으로 스카우팅 표본을 하나씩 남긴다(원본 사건 전체가 아니라 요약값만 — 저장 용량 제한).
+ if(!g.scout)g.scout={};
+ for(const [tid,side] of [[m.a,'A'],[m.b,'B']] as [string,Side][]){
+  const samples:SetScout[]=(g.scout[tid]??[]).slice();
+  for(const s of m.sets){
+   const mine=side==='A';
+   const objEvents=s.events.filter(e=>e.combat?.kind==='objective');
+   const winnerLineup=s.winner===m.a?s.lineupA:s.lineupB;
+   const pogSlot=winnerLineup.indexOf(s.pog);
+   samples.unshift({
+    season:g.season,
+    picks:mine?s.draft.picksA:s.draft.picksB, oppPicks:mine?s.draft.picksB:s.draft.picksA,
+    won:s.winner===tid, endReason:s.endReason,
+    tookFirstStruct:s.firstStructTeam===tid,
+    objSecured:objEvents.filter(e=>e.combat!.objective!.secured===side).length, objTotal:objEvents.length,
+    leadSlots:(s.leadA??[0,0,0,0,0]).map(v=>mine?v:-v),
+    pogRole:s.winner===tid&&pogSlot>=0?ROLES[pogSlot]:undefined,
+   });
+  }
+  g.scout[tid]=samples.slice(0,SCOUT_CAP);
+ }}
+// F16: 다음 상대를 준비하는 분석실. 저장된 스카우팅 표본(g.scout, 팀당 최근 SCOUT_CAP세트)만 읽는다 —
+// 진행 중인/다음 경기의 확정 픽·난수·실제 명령은 절대 참조하지 않는다(완료된 과거 세트만).
+export type ScoutReport={teamId:string,sampleSize:number,seasonRange:[number,number]|null,winRate:number,
+ pickFreq:Record<Role,{champ:string,count:number}[]>,firstStructRate:number,objRate:number,
+ avgLead:number[],strongRole:Role|null,weakRole:Role|null,
+ pogRoleFreq:{role:Role,count:number}[],endReasonFreq:{reason:string,count:number}[]};
+export function scoutReport(g:Game,teamId:string,limit=SCOUT_CAP):ScoutReport{
+ const samples=(g.scout?.[teamId]??[]).slice(0,limit);
+ const sampleSize=samples.length;
+ if(!sampleSize)return {teamId,sampleSize:0,seasonRange:null,winRate:0,
+  pickFreq:Object.fromEntries(ROLES.map(r=>[r,[] as {champ:string,count:number}[]])) as Record<Role,{champ:string,count:number}[]>,
+  firstStructRate:0,objRate:0,avgLead:[0,0,0,0,0],strongRole:null,weakRole:null,pogRoleFreq:[],endReasonFreq:[]};
+ const seasons=samples.map(s=>s.season);
+ const seasonRange:[number,number]=[Math.min(...seasons),Math.max(...seasons)];
+ const winRate=samples.filter(s=>s.won).length/sampleSize;
+ const pickFreq=Object.fromEntries(ROLES.map((r,ri)=>{
+  const counts=new Map<string,number>();
+  for(const s of samples){const c=s.picks[ri];if(c)counts.set(c,(counts.get(c)??0)+1);}
+  return [r,[...counts.entries()].map(([champ,count])=>({champ,count})).sort((a,b)=>b.count-a.count).slice(0,3)];
+ })) as Record<Role,{champ:string,count:number}[]>;
+ const firstStructRate=samples.filter(s=>s.tookFirstStruct).length/sampleSize;
+ const objSecuredSum=samples.reduce((n,s)=>n+s.objSecured,0), objTotalSum=samples.reduce((n,s)=>n+s.objTotal,0);
+ const objRate=objTotalSum?objSecuredSum/objTotalSum:0;
+ const avgLead=[0,1,2,3,4].map(i=>avg(samples.map(s=>s.leadSlots[i]??0)));
+ const bestIdx=avgLead.indexOf(Math.max(...avgLead)), worstIdx=avgLead.indexOf(Math.min(...avgLead));
+ const strongRole=avgLead[bestIdx]>150?ROLES[bestIdx]:null;
+ const weakRole=avgLead[worstIdx]<-150&&worstIdx!==bestIdx?ROLES[worstIdx]:null;
+ const pogCounts=new Map<Role,number>();
+ for(const s of samples)if(s.pogRole)pogCounts.set(s.pogRole as Role,(pogCounts.get(s.pogRole as Role)??0)+1);
+ const pogRoleFreq=[...pogCounts.entries()].map(([role,count])=>({role,count})).sort((a,b)=>b.count-a.count);
+ const reasonCounts=new Map<string,number>();
+ for(const s of samples)if(s.endReason)reasonCounts.set(s.endReason,(reasonCounts.get(s.endReason)??0)+1);
+ const endReasonFreq=[...reasonCounts.entries()].map(([reason,count])=>({reason,count}));
+ return {teamId,sampleSize,seasonRange,winRate,pickFreq,firstStructRate,objRate,avgLead,strongRole,weakRole,pogRoleFreq,endReasonFreq};
+}
 function autoMatch(g:Game,m:Match){ensureLineup(g,m.a);ensureLineup(g,m.b);while(Math.max(m.scoreA,m.scoreB)<Math.floor(m.bestOf/2)+1){const s=simulateSet(g,m);m.sets.push(s);s.winner===m.a?m.scoreA++:m.scoreB++;}finishMatch(g,m);m.sets=[];}
 function settleWeek(g:Game){g.settledWeeks=(g.settledWeeks??0)+1;for(const t of g.teams){const net=Math.round((320000+30000*t.fan/100-50000-payroll(g,t.id)-staffCost(t))/33);pay(g,t,net,'주간 운영 정산');if(t.cash<0){pay(g,t,30000,'구단 비상 지원');if(t.id===g.teamId)news(g,'구단이 3억을 긴급 지원했습니다. 다음 계약 비용을 줄여 주세요.');}}const rng=random(hash(`${g.seed}-${g.season}-${g.split}-${g.round}-${g.settledWeeks}-news`));if(rng()<.15){const t=team(g);if(rng()<.5){t.fan=clamp(t.fan+2);news(g,'지역 팬들의 응원 인터뷰가 공개되었습니다. 팬 만족도 +2');}else{pay(g,t,2000,'스폰서 특별 후원');news(g,'스폰서 특별 후원 0.2억이 입금되었습니다.');}}}
 function poPair(g:Game,n:number):[string,string]{const s=g.poSeeds,w=(i:number)=>g.po[i].winner!,l=(i:number)=>g.po[i].a===w(i)?g.po[i].b:g.po[i].a;if(n===0)return[s[2],s[5]];if(n===1)return[s[3],s[4]];if(n===2||n===3){const wins=[w(0),w(1)].sort((a,b)=>s.indexOf(b)-s.indexOf(a));return[n===2?s[0]:s[1],wins[n===2?0:1]];}if(n===4)return[w(2),w(3)];if(n===5)return[l(2),l(3)];if(n===6)return[l(4),w(5)];return[w(4),w(6)];}

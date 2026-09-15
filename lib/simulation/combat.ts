@@ -70,6 +70,8 @@ export type MatchState={
  baseTurrets:{A:number, B:number},         // 넥서스 쌍둥이 포탑 남은 수(2→0)
  nexus:{A:boolean, B:boolean},             // 넥서스 파괴 여부(정상 종료의 유일한 근거)
  lanePush:{A:number[], B:number[]},        // 추상 라인 압박(공격 팀 관점, 라인별 −1~+1.4). 오브 확보·한타 승리에서 옴 — 미니언 웨이브를 계산하지 않는다.
+ wave:{A:number[], B:number[]},            // F09(2026-09-15): 라인별 웨이브 집계(0~4, 개별 미니언 미생성). 라인전 승자 쪽에 쌓이고
+                                            // 한타 때 감쇠, 공성에 쓰이면 소모된다 — "포탑을 때릴 조건에 아군 웨이브를 포함"의 근거.
  region:{A:Region, B:Region},              // 팀 무게중심 지역(구간 간 이동 시간 계산용 추상 위치)
  events:CombatEvent[],
 };
@@ -89,7 +91,7 @@ export function newMatchState(
   region:'base' as Region,freeAt:0,
  }));
  return {A:mk('A',aStarters,aPicks),B:mk('B',bStarters,bPicks),firstKillDone:false,lastGankSeq:null,jglCommits:{A:0,B:0},pendingObjective:null,
-  clock:0,struct:{A:[0,0,0],B:[0,0,0]},baseTurrets:{A:2,B:2},nexus:{A:false,B:false},lanePush:{A:[0,0,0],B:[0,0,0]},region:{A:'base',B:'base'},events:[]};
+  clock:0,struct:{A:[0,0,0],B:[0,0,0]},baseTurrets:{A:2,B:2},nexus:{A:false,B:false},lanePush:{A:[0,0,0],B:[0,0,0]},wave:{A:[0,0,0],B:[0,0,0]},region:{A:'base',B:'base'},events:[]};
 }
 
 const clamp01=(v:number)=>Math.min(1,Math.max(0,v));
@@ -190,6 +192,9 @@ export function resolveGank(
  }
  // 정글 템포: 합류하지 않아도 승리 라인 근처 파밍/카정 이득 (기존 RES_JGL_CARRY 대체 — 단일 소스)
  if(!committed) add(attJgl, CS_LIGHT*(0.25+margin*0.45));
+ // F09: 이 라인전 승자 쪽에 웨이브가 쌓인다(처치>탈출>회피>순수 라인전 순). 패자 쪽은 흩어진다.
+ st.wave[winSide][lane]=clampN(st.wave[winSide][lane]+(kill?1.4:(committed&&!spotted)?1.0:spotted?0.3:0.6+margin*0.6),0,4);
+ st.wave[loseSide][lane]=clampN(st.wave[loseSide][lane]*0.4,0,4);
 
  const prior=st.lastGankSeq;
  if(committed) st.lastGankSeq=seq;
@@ -276,6 +281,9 @@ export function resolveBotLane(
   ev.push(`${wAdc.player}·${wSup.player} 라인 주도권 · 포탑 압박`);
  }
  if(!committed) add(wJgl, CS_LIGHT*(0.25+margin*0.45)); // 정글 템포
+ // F09: 바텀 라인(2)도 같은 웨이브 축적 규칙(처치>탈출/보호>회피>순수 라인전).
+ st.wave[winSide][2]=clampN(st.wave[winSide][2]+(killAdc?1.4:peeled?1.0:spotted?0.3:0.6+margin*0.6),0,4);
+ st.wave[loseSide][2]=clampN(st.wave[loseSide][2]*0.4,0,4);
 
  const prior=st.lastGankSeq; if(committed) st.lastGankSeq=seq;
  const resource=[0,1,2,3,4].map(s=>res[s]-res[5+s]);
@@ -550,6 +558,8 @@ export function resolveTeamfight(
  // 라인 압박: 결판 승자가 다음 공성의 라인 우선순위를 얻는다(추상값, 미니언 아님). 매 사건 소폭 감쇠.
  for(const s of ['A','B'] as Side[]) for(let L=0;L<3;L++) st.lanePush[s][L]*=0.85;
  if(winner) for(let L=0;L<3;L++) st.lanePush[winner][L]=clampN(st.lanePush[winner][L]+0.18,-1,1.4);
+ // F09: 한타로 시선이 쏠리는 사이 라인 웨이브는 빠르게 무의미해진다(양쪽 다 방치 — lanePush보다 가파른 감쇠).
+ for(const s of ['A','B'] as Side[]) for(let L=0;L<3;L++) st.wave[s][L]*=0.55;
  const ce:CombatEvent={
   seq,clock,kind:'teamfight',lane:null,side:winner??favSide,
   committed:false,followUp:false,spotted:false,
@@ -636,16 +646,22 @@ export function resolveSiege(st:MatchState, seq:number, clock:number, crng:()=>n
  const adcAlive=st[atkSide][3].alive;
  const adcSiege=adcAlive?(eff(st[atkSide][3],S_CAR)-50)/70:-0.4;   // 살아남은 원딜이 철거를 크게 당긴다
  const momentum=Math.max(...st.lanePush[atkSide]);               // 연속 공성 주도권(오브·한타 승리·직전 철거에서 누적)
- // 공성 가능량은 실제 상황(생존 공격자·수비자·이동 시간·부활 창·라인 압박·개인 자원)에서만 유도한다.
+ // F09: 아군 웨이브 없이는 포탑을 오래 못 때린다(미니언 아그로 없이 혼자 타워를 맞는 실제 제약의 추상화).
+ // targetBase(라인 특정 안 됨)는 세 라인 중 가장 쌓인 웨이브를 쓴다(어느 방향이든 그 웨이브를 앞세워 밀 수 있음).
+ const waveHelp=lane>=0?st.wave[atkSide][lane]:Math.max(...st.wave[atkSide]);
+ // 공성 가능량은 실제 상황(생존 공격자·수비자·이동 시간·부활 창·라인 압박·웨이브·개인 자원)에서만 유도한다.
  //  - 구조물에서 뒤졌다는 사실 자체는 공성을 막지 않는다(D017): 열세팀도 유리한 교전을 이기면 구조물을 철거할 수 있어야 한다.
  //  - 스노볼 되돌리기는 인위적 보너스로 막지 않는다. 자연스러운 제동(goldGap 하한 −0.6, 넥서스는 openInhib+baseTurrets 0+수비 소수 필요)만 유지.
  // 교전 결과(numAdv)와 운영 주도권(momentum)이 주 동력. 자원차는 이미 확률 채널(resPow)에도 쓰였으므로 여기선 보조.
- let capacity=numAdv*1.15+timeF*1.15+clampN(goldGap,-0.6,0.85)+(bestObj-55)/44+adcSiege*0.75+momentum*1.0;
+ let capacity=numAdv*1.15+timeF*1.15+clampN(goldGap,-0.6,0.85)+(bestObj-55)/44+adcSiege*0.75+momentum*1.0+waveHelp*0.4;
  capacity=Math.max(0,capacity);
 
  const res=[0,0,0,0,0,0,0,0,0,0];
  const add=(sl:number,g:number)=>{ st[atkSide!][sl].gold+=g; res[(atkSide==='A'?0:5)+sl]+=g; };
  const evd:string[]=[`${atkSide} ${atk.length}인 공성 vs ${defSide} ${def.length}인 수비 · 부활까지 ${Math.round(reinforceIn)}초 · 여력 ${capacity.toFixed(1)}`];
+ if(waveHelp>1)evd.push(`아군 웨이브가 함께 포탑을 압박합니다(웨이브 ${waveHelp.toFixed(1)})`);
+ else if(waveHelp<0.3)evd.push('미니언 웨이브 없이 홀로 포탑을 두드리는 중 — 오래 버티지 못함');
+ if(lane>=0)st.wave[atkSide][lane]=clampN(st.wave[atkSide][lane]*0.3,0,4); // 공성에 쓴 웨이브는 소모된다(밀어 넣고 나면 사라짐)
  let structuresDown=0,inhib=false,nexus=false;
  let budget=Math.floor(capacity);
 

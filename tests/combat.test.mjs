@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {newGame,upgradeGame,simulateSet,starters,ROLES,random,hash,CHAMPIONS} from '../lib/game.ts';
-import {newMatchState,resolveObjective,resolveTeamfight,resolveSiege,hasArrived,regionTime,REGION_DIST} from '../lib/simulation/combat.ts';
+import {newMatchState,resolveGank,resolveBotLane,resolveObjective,resolveTeamfight,resolveSiege,hasArrived,regionTime,REGION_DIST} from '../lib/simulation/combat.ts';
 
 function controlledBase(){
  const g=upgradeGame(newGame('nva',1));
@@ -703,6 +703,44 @@ const CRNG=()=>random(hash('obj-test'));
   // 인원차·창·자원 완전 통제 후에도, 살아남은 게 CAR↑ 원딜이면 철거가 더 많다(순수 adcSiege 채널).
   assert.ok(topDead/n > adcDead/n + 0.2, `공성 직전 상태 동일, ADC 생존만 다름 → 철거: ADC생존 ${(topDead/n).toFixed(2)} > ADC사망 ${(adcDead/n).toFixed(2)}`);
   console.log(`  · 10k: 철거/공성 [A4:B3, 죽은 슬롯만 ADC↔TOP] — ADC사망 ${(adcDead/n).toFixed(2)} vs ADC생존 ${(topDead/n).toFixed(2)}`);
+ }
+
+ // 10l. F09: 통제 실험 — 10k와 동일한 공성 직전 상태(인원차·창·자원 전부 동일), 웨이브 유무만 바꾼다.
+ //      "포탑을 때릴 조건에 아군 웨이브를 포함한다"(F09 완료 조건)를 직접 증명한다.
+ //      대상 라인이 매번 확률적으로 정해질 수 있어(라인 압박 동률 시 crng() 미세값으로 결정) 세 라인
+ //      전부에 웨이브를 둔다 — 그래야 어느 라인이 뽑혀도 같은 조건으로 비교된다.
+ {
+  const armW=(waveVal)=>mkState(s=>{
+   s.clock=1400; s.region.A='river'; s.region.B='river';
+   s.B[0].alive=false; s.B[0].deaths++; s.B[0].respawnAt=1428;
+   s.B[1].alive=false; s.B[1].deaths++; s.B[1].respawnAt=1432;
+   for(const c of s.A) c.gold=1500; for(const c of s.B) c.gold=2000;
+   s.wave.A=[waveVal,waveVal,waveVal];
+  });
+  // 주 증거: capacity(공성 여력) 자체가 정확히 설계한 만큼(0.4·웨이브) 커진다 — 결정적, N 반복 불필요.
+  const r0=resolveSiege(armW(0),40,1400,seedRng('w-cap-probe')),r1=resolveSiege(armW(4),40,1400,seedRng('w-cap-probe'));
+  assert.ok(Math.abs((r1.siege.capacity-r0.siege.capacity)-1.6)<0.05,
+   `웨이브 0→4는 capacity를 정확히 0.4×4=1.6 올린다: ${r0.siege.capacity} → ${r1.siege.capacity}`);
+  // 실전 증거: structuresDown은 사건당 최대 2로 캡돼 있어(구조물 진행 규칙) 여력이 이미 충분히 큰
+  // 상태에서는 웨이브 유무 차이가 가려진다 — 그래서 이 통제 상태는 캡에 걸릴 만큼 여력이 크다(10k와
+  // 같은 세팅). 캡에 안 걸리는 낮은 여력 구간에서의 효과는 위 capacity 직접 비교가 이미 증명했다.
+  console.log(`  · 10l: 웨이브 0→4 capacity ${r0.siege.capacity} → ${r1.siege.capacity} (structuresDown은 사건당 상한 2로 이미 포화: ${r0.siege.structuresDown}/${r1.siege.structuresDown})`);
+  // 공성에 쓴 웨이브는 소모된다(무제한 재사용 방지) — 실제로 선택된 라인에서 확인.
+  const stC=armW(4);
+  const used=resolveSiege(stC,40,1400,seedRng('w-consume'));
+  if(used.siege.lane>=0)assert.ok(stC.wave.A[used.siege.lane]<1.5,'공성에 쓴 웨이브는 소모된다');
+ }
+
+ // 10m. F09: 라인전 승자 쪽에 웨이브가 쌓이고 패자 쪽은 흩어진다(resolveGank/resolveBotLane).
+ {
+  const stG=mkState(s=>{s.clock=150;});
+  const before=stG.wave.A[0];
+  resolveGank(stG,0,0,true,0.6,150,seedRng('wave-gank')); // A가 탑에서 확실히 유리(margin 0.6)
+  assert.ok(stG.wave.A[0]>before,`탑 라인전 승리 팀(A) 웨이브 증가: ${before} → ${stG.wave.A[0]}`);
+  const stB=mkState(s=>{s.clock=498;});
+  const beforeB=stB.wave.B[2];
+  resolveBotLane(stB,2,false,0.6,498,seedRng('wave-bot')); // B가 바텀에서 확실히 유리
+  assert.ok(stB.wave.B[2]>beforeB,`바텀 라인전 승리 팀(B) 웨이브 증가: ${beforeB} → ${stB.wave.B[2]}`);
  }
 }
 

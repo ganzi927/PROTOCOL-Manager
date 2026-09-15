@@ -155,6 +155,27 @@ export function legalDraftCandidates(g:Game,ds:DraftState):Champion[]{
  const remain:Record<string,number>={};for(const c of cands)remain[c.role]=(remain[c.role]??0)+1;
  return cands.filter(c=>remain[c.role]>2); // don't ban a lane out of viable champions
 }
+// F07(2026-09-15): 다음 한 수(상대 차례 1단계)까지 내다본다 — 재귀 없음, 상위 5후보만(시간 예산).
+// legalDraftCandidates를 그대로 쓴다(추천·자동 픽과 같은 합법성 검사 — 완료 조건). 확정 안 된 상대의
+// "진짜" 다음 선택을 미리 읽지 않는다: 이 함수는 "만약 내가 c를 골랐다면"이라는 가상 상태만 만들고,
+// 그 가상 상태에서 상대가 둘 수 있는 합법 수 중 상대에게 가장 좋은 값만 본다(이미 확정된 픽·밴만 사용,
+// rng 미소비 — draftFitScore는 순수 함수라 draft rng 스트림 호출 횟수에 영향 없음).
+function bestOpponentReply(g:Game,ds:DraftState):number{
+ if(ds.step>=DRAFT_ORDER.length||ds.complete)return 0;
+ const [side2,kind2]=DRAFT_ORDER[ds.step];const replier=side2==='B'?ds.blue:ds.red,replierOpp=replier===ds.blue?ds.red:ds.blue;
+ const cands2=legalDraftCandidates(g,ds);
+ if(!cands2.length)return 0;
+ const ownPicks=draftPicksOf(ds,replier).map(p=>p.champ),oppPicks=draftPicksOf(ds,replierOpp).map(p=>p.champ);
+ const baseline=draftFitScore(ownPicks,oppPicks);
+ let best=-Infinity;
+ for(const c2 of cands2){
+  const v=kind2==='BAN'
+   ?draftFitScore(ownPicks,[...oppPicks,c2.id])-baseline // 밴 = 상대(밴하는 쪽 기준 적) 조합을 깎는 값
+   :draftFitScore([...ownPicks,c2.id],oppPicks)-baseline; // 픽 = 자기 조합을 올리는 값
+  if(v>best)best=v;
+ }
+ return best;
+}
 function aiPick(g:Game,m:Match,ds:DraftState):string{
  const [side,kind]=DRAFT_ORDER[ds.step];const teamId=side==='B'?ds.blue:ds.red,oppId=teamId===ds.blue?ds.red:ds.blue;
  const cands=legalDraftCandidates(g,ds);
@@ -165,7 +186,7 @@ function aiPick(g:Game,m:Match,ds:DraftState):string{
  const rate=(ps:Player[],champ:string)=>{let m=0;for(const p of ps)m=Math.max(m,masteryLevel(p,champ));return m;};
  const cov:Record<string,number>={};for(const p of draftPicksOf(ds,teamId))cov[champById(p.champ).role]=(cov[champById(p.champ).role]??0)+1;
  const open=ROLES.filter(r=>!cov[r]);
- let best='',bestScore=-Infinity;
+ const scored:{id:string,s:number}[]=[];
  for(const c of cands){
   const meta=metaSet.has(c.id)?3:0;let s:number;
   if(kind==='BAN'){
@@ -179,7 +200,19 @@ function aiPick(g:Game,m:Match,ds:DraftState):string{
    s=draftFitScore([...draftPicksOf(ds,teamId).map(p=>p.champ),c.id],draftPicksOf(ds,oppId).map(p=>p.champ))*1.5+fit+(player?masteryLevel(player,c.id)*2:0)+(t.tactic==='early'&&c.tags.includes('engage')?2:t.tactic==='late'&&c.tags.includes('scale')?2:0)+meta;
   }
   s+=rng()*noise;
-  if(s>bestScore){bestScore=s;best=c.id;}
+  scored.push({id:c.id,s});
+ }
+ scored.sort((a,b)=>b.s-a.s);
+ // 상대 응수 탐색은 사용자가 직접 겪는 매치(AI가 사용자의 상대·응수로 뛸 때)에서만 돈다 — 리그 전체
+ // 자동 진행(autoMatch, 사용자가 보지 않는 다른 팀 경기)까지 비싸게 만들 이유가 없다(F07 목적은
+ // "사람이 읽을 수 있는 AI 밴픽", 배경 시즌 시뮬레이션 품질이 아니다). 성능 회귀 없이 시간 예산을 지킨다.
+ if(m.a!==g.teamId&&m.b!==g.teamId)return scored[0].id;
+ const TOPN=Math.min(5,scored.length);
+ let best=scored[0].id,bestAdj=-Infinity;
+ for(let i=0;i<TOPN;i++){
+  const ds2=structuredClone(ds);applyDraftStep(ds2,scored[i].id);
+  const adj=scored[i].s-0.4*bestOpponentReply(g,ds2); // 상대 응수가 클수록(내가 좋은 자리를 남겨줄수록) 감점
+  if(adj>bestAdj){bestAdj=adj;best=scored[i].id;}
  }
  return best;
 }

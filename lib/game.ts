@@ -223,6 +223,12 @@ const RES_DEAD=42,RES_CAP=165,RES_SCALE=150,RES_OBJ=3.0,RES_FIGHT=4.6; // 자원
 export function simulateSet(g:Game,m:Match):SetResult{
  const draft=m.draft??pickDraft(g,m),rng=random(hash(`${g.seed}|outcome|${m.id}|${m.sets.length}`));
  const de=draftEffects(draft.picksA,draft.picksB); // 조합 효과(A 관점, 결정적). 라인/오브젝트/한타에 각각 1회 가산.
+ // flavor: 표시용 팀 골드 곡선 전용 난수(F03 감사, 2026-09-15). GoldGraph의 e.goldA/goldB는 이 스트림으로
+ // 그려진다 — combat.ts Combatant.gold(개인 자원, 처치·어시·구조물로만 증가, 파밍 없음)의 팀 합과 다르다.
+ // gA/gB의 "누가 더 버는가"는 항상 그 사건의 실제 승자(waIn)를 따른다(가짜 승자 없음) — flavor는 폭만 흔든다.
+ // 완전한 "개인 골드 합=팀 골드" 단일화는 F09(라인 웨이브·파밍 경제)가 있어야 자연스럽다: 지금 combat.ts의
+ // gold는 파밍 수입이 없어 실제 LoL보다 훨씬 작고 들쭉날쭉하다 — 지금 그대로 합산해 표시로 바꾸면 "미확보
+ // 오브젝트 표시 골드 균등"(tests/combat.test.mjs 8a) 안전장치가 깨지고 그래프가 더 뒤죽박죽으로 보인다.
  const flavor=random(hash(`${g.seed}|flavor|${m.id}|${m.sets.length}`));let gA=2500,gB=2500;
  const narr=random(hash(`${g.seed}|narr|${m.id}|${m.sets.length}`)),mem=newNarrMemory(); // 중계 전용 난수(승부/골드와 분리)
  const pa=powers(g,m.a,draft.picksA,random(hash(`${g.seed}|conditionA|${m.id}|${m.sets.length}`))),pb=powers(g,m.b,draft.picksB,random(hash(`${g.seed}|conditionB|${m.id}|${m.sets.length}`)));

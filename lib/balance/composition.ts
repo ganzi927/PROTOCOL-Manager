@@ -28,6 +28,43 @@ export type CompProfile={
  range:number;    // 평균 교전 사거리(피격 회피)
  early:number;    // 초반 주도권(−면 취약)
  late:number;     // 후반 캐리력
+ sideline:number; // 사이드 라인 단독 운영·스플릿 푸시(F05, 2026-09-15 신설 축) — 기존 4태그엔 없던 축.
+};
+
+// F05(2026-09-15): 태그 2개만으로는 "포킹 사거리가 있는가"와 "혼자 사이드를 압박할 수 있는가"를
+// 구분하지 못한다(예: 기존 데이터의 피오라는 poke 태그를 가졌지만 실제로는 원거리 견제 수단이 없는
+// 근접 듀얼리스트다 — 이 버그가 F05가 지목한 "사이드 운영 챔피언이 포킹 조합으로 오분류"의 실제 사례).
+// 대표 20종의 프로필을 전면 재정의(태그 파생이 아니라 챔피언별 수동 값)해 먼저 검수한다. 나머지 120종은
+// 기존 태그 파생 계산으로 계속 폴백 — 완전히 새로 만든 게 아니라 기존 값 유지, 이 표는 점진적으로 확대한다.
+// 출처: 공식 롤 챔피언 스킬셋(클로드 학습 데이터 기준, 검수일 2026-09-15) — 특정 패치 수치가 아니라
+// "원거리 견제 수단이 있는가/근접인가/스플릿에 강한 단독 생존기가 있는가" 같은 안정적인 정체성만 반영했다.
+// 외부 승률 데이터가 아니라 게임 내 설계값이라는 원칙(파일 상단 주석)은 유지한다.
+const CURATED:Record<string,CompProfile>={
+ // TOP
+ Tfiora:{engage:.3,peel:0,poke:0,scale:.8,frontline:.1,range:-.3,early:.1,late:.5,sideline:1.3}, // 근접 듀얼리스트, 궁극(급소)은 원거리 견제가 아니라 처형·생존기 — 사이드 1v1 최상위
+ Tcamille:{engage:.5,peel:.1,poke:0,scale:.5,frontline:.3,range:-.2,early:.2,late:.3,sideline:1.1}, // 궁극은 단일 대상 고립(픽)이지 팀 광역 이니시가 아님 — 스플릿·사이드 픽 위주
+ Tmalphite:{engage:1.3,peel:.5,poke:0,scale:.1,frontline:1.0,range:-.2,early:.1,late:0,sideline:-.3}, // 광역 스턴 궁극 — 팀에 붙어야 가치가 남, 사이드 운영엔 약함
+ Tjax:{engage:.3,peel:.1,poke:0,scale:1.0,frontline:.5,range:-.2,early:-.1,late:.7,sideline:1.0}, // 궁극은 반격형(대상 대응) — 성장형 스플릿 듀얼리스트
+ // JGL
+ Jvi:{engage:1.2,peel:.2,poke:0,scale:.3,frontline:.6,range:-.2,early:.3,late:.1,sideline:-.1}, // 단일 대상 고정 돌진 — 팀 이니시 특화
+ Jzac:{engage:1.1,peel:.4,poke:0,scale:.3,frontline:.9,range:-.1,early:.1,late:0,sideline:-.2}, // 광역 바운스 이니시, 최상위 내구
+ Jgraves:{engage:.2,peel:0,poke:.2,scale:.5,frontline:0,range:.2,early:.4,late:.2,sideline:.4}, // 원거리 포킹이 아니라 중거리 버스트 스커미셔 — 기존 poke 태그보다 훨씬 약한 견제
+ Jivern:{engage:.1,peel:.9,poke:0,scale:.2,frontline:.2,range:0,early:.2,late:-.2,sideline:-.3}, // 전투력 최소, 오브젝트 보조·아군 보호 전담 유틸
+ // MID
+ Mxerath:{engage:0,peel:0,poke:1.4,scale:.4,frontline:-.6,range:1.2,early:.2,late:.1,sideline:-.2}, // 최장거리 진짜 포킹 메이지, 근접 교전 최약체
+ Myasuo:{engage:.4,peel:.1,poke:0,scale:.6,frontline:.2,range:-.3,early:-.1,late:.5,sideline:.6}, // 근접 콤보형, 원거리 견제 수단 없음
+ Mazir:{engage:.1,peel:.1,poke:1.2,scale:.8,frontline:-.4,range:1.0,early:-.2,late:.4,sideline:.3}, // 소환 병사로 공성·사거리 극대화, 병사로 사이드 라인 관리도 가능
+ Mzed:{engage:.3,peel:0,poke:0,scale:.5,frontline:-.3,range:-.3,early:.2,late:.3,sideline:.5}, // 근접 단일 픽 암살, 원거리 견제 없음
+ // ADC
+ Acaitlyn:{engage:0,peel:0,poke:1.3,scale:.5,frontline:-.5,range:1.3,early:.4,late:.2,sideline:.5}, // 최장거리 원딜 포킹 + 트랩으로 사이드 라인 관리
+ Avayne:{engage:0,peel:0,poke:0,scale:1.2,frontline:-.2,range:-.4,early:-.3,late:.9,sideline:.5}, // 근접 지속딜 원딜 — 기존 poke 태그 부정확, 실제로는 사이드 1v1형
+ Ajinx:{engage:0,peel:0,poke:.7,scale:1.2,frontline:-.4,range:.7,early:-.4,late:1.0,sideline:-.2}, // 원거리+지속딜 하이브리드, 극후반 캐리, 혼자면 취약
+ Akalista:{engage:.6,peel:0,poke:.4,scale:.4,frontline:-.3,range:.4,early:.3,late:.1,sideline:.1}, // 궁극으로 아군과 동반 돌진 — 포킹+이니시 혼합형 픽 챔피언
+ // SUP
+ Sthresh:{engage:.9,peel:.7,poke:.1,scale:.2,frontline:.4,range:.1,early:.2,late:.1,sideline:-.1}, // 후크 이니시 + 랜턴 보호를 동시에 가진 대표적 하이브리드
+ Slulu:{engage:0,peel:1.3,poke:.1,scale:.3,frontline:-.1,range:.2,early:.1,late:.1,sideline:-.2}, // 이니시 수단 거의 없는 순수 보호형
+ Spyke:{engage:.9,peel:.1,poke:0,scale:.3,frontline:0,range:-.1,early:.5,late:0,sideline:.2}, // 기습 처형형 — 기존 poke 태그 부정확, 실제론 로밍형 픽 이니시
+ Syuumi:{engage:0,peel:1.2,poke:.2,scale:.6,frontline:-.5,range:.3,early:-.2,late:.3,sideline:-.5}, // 아군에 부착 — 프론트라인·사이드 운영 사실상 0
 };
 
 // 태그가 특성에 기여하는 양(설계값). 챔피언마다 태그 2개.
@@ -46,13 +83,14 @@ const ROLE_BASE:Record<Role,Partial<CompProfile>>={
  SUP:{peel:.4,poke:.1,late:-.2},
 };
 
-const ZERO=():CompProfile=>({engage:0,peel:0,poke:0,scale:0,frontline:0,range:0,early:0,late:0});
+const ZERO=():CompProfile=>({engage:0,peel:0,poke:0,scale:0,frontline:0,range:0,early:0,late:0,sideline:0});
 const clamp=(v:number,a:number,b:number)=>Math.min(b,Math.max(a,v));
 const sum=(ns:number[])=>ns.reduce((x,y)=>x+y,0);
 
 const profileCache=new Map<string,CompProfile>();
 export function champProfile(champId:string):CompProfile{
  if(profileCache.has(champId))return {...profileCache.get(champId)!};
+ if(CURATED[champId]){const cp={...CURATED[champId]};profileCache.set(champId,cp);return {...cp};}
  const c=champById(champId),p=ZERO();
  const add=(src?:Partial<CompProfile>)=>{if(src)for(const k of Object.keys(src) as (keyof CompProfile)[])p[k]+=src[k]!;};
  add(ROLE_BASE[c.role]);
@@ -79,6 +117,7 @@ function aggregateRaw(picks:string[]){
   range:sum(T.map(p=>p.range))/5,
   early:sum(T.map(p=>p.early))/5,
   late:sum(T.map(p=>p.late))/5,
+  sideline:sum(T.map(p=>Math.max(0,p.sideline))),
   // 피해 유형 다양성: AD·AP 위협이 각각 2개 이상이면 대응 난도가 올라간다(혼합은 양쪽에 계수).
   dmgMix:(()=>{const t=picks.map(id=>champById(id).type);
    return t.filter(x=>x!=='AP').length>=2&&t.filter(x=>x!=='AD').length>=2?1:0;})(),
@@ -105,8 +144,11 @@ export function draftEffects(picksA:string[],picksB:string[]):DraftEffects{
  const diveEdge=a.engage*(1-Math.min(1,b.peel/2.5))-b.engage*(1-Math.min(1,a.peel/2.5));
 
  // 스케일 스택은 프로필의 early(−)/late(+)로 자연히 라인 취약·후반 강함이 된다.
+ // §4.5(F05 신설): 사이드 운영 — 포킹·이니시 조합이 아니어도 스플릿으로 오브젝트 타이밍을 벌 수 있다.
+ // 라인/한타에는 넣지 않는다(사이드에 있다는 것 자체가 그 교전엔 안 낀다는 뜻 — 이중 반영 금지).
+ const sideEdge=Math.tanh((a.sideline-b.sideline)/3);
  const lane =clamp(0.55*pokeEdge+0.70*(a.range-b.range)+1.10*(a.early-b.early),-3,3);
- const obj  =clamp(0.70*completion+0.35*pokeEdge+0.40*synergy,-3,3);
+ const obj  =clamp(0.70*completion+0.35*pokeEdge+0.40*synergy+0.45*sideEdge,-3,3);
  const fight =clamp(1.00*completion+0.85*synergy+0.50*diveEdge+1.30*(a.late-b.late),-3,3);
  return {lane,obj,fight};
 }

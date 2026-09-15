@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {newGame,upgradeGame,starters,ROLES,CHAMPIONS,simulateSet} from '../lib/game.ts';
-import {champProfile,draftEffects} from '../lib/balance/composition.ts';
+import {champProfile,draftEffects,compositionPlan} from '../lib/balance/composition.ts';
 
 // --- 1. champProfile: 태그 → 파생 특성이 설계 의도대로 나온다 ---
 {
@@ -88,6 +88,35 @@ const M=(pa,pb)=>({id:'c-1',a:'nva',b:'crn',bestOf:3,scoreA:0,scoreB:0,sets:[],l
   const expect=e.index<3?r.draftFx.lane:e.index<5?r.draftFx.obj:0;
   assert.ok(Math.abs(e.compA-expect)<1e-9,`compA는 draftFx 한 곳에서만 온다 (idx ${e.index})`);
  }
+}
+
+// --- 6. F05: 대표 20종 수동 프로필 — 사이드 운영 챔피언이 포킹으로 오분류되던 사례 고정 검사 ---
+{
+ // 피오라는 원거리 견제 수단이 없는 근접 듀얼리스트다. 태그 파생(구 시스템)이었다면 poke 태그 때문에
+ // poke>0이었을 것 — 수동 프로필은 poke=0, 대신 신설 sideline 축이 강하게 잡혀야 한다.
+ const fiora=champProfile('Tfiora');
+ assert.equal(fiora.poke,0,'피오라는 원거리 견제 수단이 없다 — poke=0');
+ assert.ok(fiora.sideline>1,`피오라는 사이드 운영 최상위: sideline=${fiora.sideline}`);
+ // 아직 수동 검수하지 않은 챔피언은 기존 태그 파생 폴백을 그대로 쓴다(회귀 없음) — poke 태그를 가진
+ // 일반 챔피언은 여전히 poke>0.
+ const genericPoke=CHAMPIONS.find(c=>c.tags.includes('poke')&&!['Tfiora','Tcamille','Tmalphite','Tjax','Jvi','Jzac','Jgraves','Jivern','Mxerath','Myasuo','Mazir','Mzed','Acaitlyn','Avayne','Ajinx','Akalista','Sthresh','Slulu','Spyke','Syuumi'].includes(c.id));
+ assert.ok(champProfile(genericPoke.id).poke>0,'검수 안 된 챔피언은 태그 파생 폴백 유지');
+
+ // 근접 듀얼리스트 5명으로만 구성한 팀은 더 이상 '포킹' 조합으로 분류되지 않는다.
+ const sideTeam=['Tfiora','Jgraves','Mzed','Avayne','Spyke'];
+ const plan=compositionPlan(sideTeam);
+ assert.notEqual(plan.style,'poke',`근접 사이드 조합이 포킹으로 오분류됨: ${plan.style} (scores=${JSON.stringify(plan.scores)})`);
+
+ // UI(compositionPlan)·엔진(draftEffects/aggregate 내부)이 champProfile 하나로 통일돼 있다 — 같은 id는
+ // 항상 같은 프로필(참조 동일 X, 값 동일 — 캐시 복사본).
+ assert.deepEqual(champProfile('Tfiora'),champProfile('Tfiora'),'같은 챔피언은 항상 같은 프로필');
+
+ // 신설 sideline 축이 실제로 obj 채널에 반영된다: 프론트라인·이니시는 압도적으로 밀리지만(한타 열세)
+ // 사이드 운영 격차가 그 열세를 obj 채널에서는 일부 상쇄한다(한타보다 덜 불리하거나 유리).
+ const shared=['Jleesin','Mahri','Ajinx','Sthresh'];
+ const sideHeavy=draftEffects(['Tfiora',...shared],['Tmalphite',...shared]);
+ assert.ok(sideHeavy.fight<0,`프론트라인·이니시 격차로 한타는 열세: ${sideHeavy.fight}`);
+ assert.ok(sideHeavy.obj>sideHeavy.fight,`사이드 운영 축이 obj 채널에서 한타 열세를 일부 상쇄해야 함: obj=${sideHeavy.obj} fight=${sideHeavy.fight}`);
 }
 
 console.log('PASS composition: profile derivation, pure antisymmetry, matchup direction, engine segment sensitivity, single-path determinism');

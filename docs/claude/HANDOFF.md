@@ -1,3 +1,5 @@
+> 2026-09-15 최신: `docs/claude/PROTOCOL-Claude-Development-Orders.md`(F01~F27)를 순서대로 진행 중. 실제 완료/검증 기록은 `docs/claude/DEVELOPMENT_ORDERS_PROGRESS.md`를 먼저 읽을 것 — 이 파일의 아래 옛 기록보다 우선한다. 완료 항목 재구현 금지.
+
 > 최신 후속: `BROADCAST_CONTINUATION.md` 우선. 현재 KDA·역할 진형·키프레임 상태 시각·완료 사건 공개·재생 제어 수정. Git 작업 없음.
 
 > 2026-09-14 Codex 업데이트: `BROADCAST_UPDATE.md`를 먼저 읽을 것. D022 이후 공통 경로·도착, 조합 전투, 적 넥서스 재생을 구현했다. 다음 인수는 PC/모바일 브라우저 확인이며 과거 미완료 절차를 그대로 재구현하지 않는다.

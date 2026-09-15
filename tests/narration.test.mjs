@@ -94,4 +94,21 @@ const toSec=t=>{const[m,s]=t.split(':').map(Number);return m*60+s;};
  }
 }
 
-console.log('PASS narration: determinism, event fields, monotonic clock, memory callbacks, kill-count integrity, intensity variety, grounded manager levers');
+// --- 8. F12/F13: 감독 지시(딜러 보호/위험 감수 진입)가 실제로 반영됐을 때만 '작전 지시' beat가 등장 ---
+{
+ for(let seed=0;seed<80;seed++){
+  g.seed=seed;
+  const none=simulateSet(g,mUser).events.flatMap(e=>e.beats);
+  assert.ok(!none.some(b=>b.label==='작전 지시'),`지시 없음(기본 regroup) → 작전 지시 beat 없음 (seed ${seed})`);
+  const protectSet=simulateSet(g,mUser,'protect');
+  const protectTfN=protectSet.events.filter(e=>e.combat?.kind==='teamfight').length;
+  const protectBeats=protectSet.events.flatMap(e=>e.beats).filter(b=>b.label==='작전 지시');
+  if(protectTfN)assert.ok(protectBeats.length===protectTfN&&protectBeats.every(b=>b.text.includes('딜러 보호를 지시')),`protect 지시 → 한타마다 딜러 보호 문구만 (seed ${seed})`);
+  const allinSet=simulateSet(g,mUser,'allin');
+  const allinTfN=allinSet.events.filter(e=>e.combat?.kind==='teamfight').length;
+  const allinBeats=allinSet.events.flatMap(e=>e.beats).filter(b=>b.label==='작전 지시');
+  if(allinTfN)assert.ok(allinBeats.length===allinTfN&&allinBeats.every(b=>b.text.includes('위험을 감수하고 교전을 강행')),`allin 지시 → 한타마다 위험 감수 문구만 (seed ${seed})`);
+ }
+}
+
+console.log('PASS narration: determinism, event fields, monotonic clock, memory callbacks, kill-count integrity, intensity variety, grounded manager levers, F12 director beats');

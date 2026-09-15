@@ -294,6 +294,12 @@ export function narrateEvent(c:NarrCtx,mem:NarrMemory,rng:()=>number):NarrateRes
    if(Math.abs(sp.entry)>.025) at(18,'진형',`${sp.entry>0?c.aShort:c.bShort}가 진입과 받아치기 구도에서 유리한 조건을 만듭니다.`);
    if(Math.abs(sp.growth)>.025) at(16,'성장',`${sp.growth>0?c.aShort:c.bShort} 조합이 현재 경기 시간의 성장 구간에서 힘을 받습니다.`);
   }
+  // F13: 감독 지시(F12)가 실제로 이 한타에 반영됐을 때만 언급한다 — cb.evidence(엔진 원본)에 근거,
+  // 지시하지 않았거나 효과가 0이면 아무 말도 하지 않는다("공격적 지시: 승률+10%" 식 근거 없는 칭찬 금지).
+  const protectNote=(cb.evidence||[]).find(e=>e.includes('딜러 보호 강화'));
+  if(protectNote) at(21,'작전 지시', `${protectNote.startsWith('A')?c.aShort:c.bShort} 감독이 이번 한타에서 딜러 보호를 지시했습니다 — 서포터가 보호에 더 집중합니다.`);
+  if((cb.evidence||[]).some(e=>e.includes('위험을 감수')))
+   at(21,'작전 지시', `감독이 위험을 감수하고 교전을 강행하라 지시했습니다 — 불리해 보여도 물러나지 않습니다.`);
 
   const initiator=[...fr.contrib].sort((x,y)=>y.engage-x.engage)[0];
   const protector=fr.contrib.find(x=>x.protect>0);

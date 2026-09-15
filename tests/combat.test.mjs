@@ -591,6 +591,53 @@ const CRNG=()=>random(hash('obj-test'));
  }
 }
 
+// --- 9c. F18 Phase B: 성향(temperament)이 결정 게이트(합류할지)에만 영향 — 처치·오브 확보 확률에는 안 닿는다 ---
+{
+ const seedRng=tag=>random(hash(tag));
+ const S70=()=>Array(6).fill(70);
+ const mkTempState=(temperFn)=>newMatchState(
+  ROLES.map(r=>({stats:S70(),name:'A_'+r,role:r})),
+  ROLES.map(r=>({stats:S70(),name:'B_'+r,role:r})),
+  ['p0','p1','p2','p3','p4'],['q0','q1','q2','q3','q4'],
+  ()=>0,()=>false,temperFn);
+ const NEUTRAL=()=>({engage:0,resource:0,info:0,call:0});
+ const withEngage=(side,slot,v)=>(s,sl)=>s===side&&sl===slot?{engage:v,resource:0,info:0,call:0}:NEUTRAL();
+ const withResource=(side,slot,v)=>(s,sl)=>s===side&&sl===slot?{engage:0,resource:v,info:0,call:0}:NEUTRAL();
+
+ // (1) 교전 성향(engage) — A 정글러(slot1)의 갱킹 합류율이 신중↔과감에 따라 유의미하게, 단조적으로 갈린다.
+ {
+  const N=1500;
+  const commitRate=engageVal=>{let c=0;for(let s=0;s<N;s++){const st=mkTempState(withEngage('A',1,engageVal));const ce=resolveGank(st,0,0,true,0.3,150,seedRng('f18-gank-'+engageVal+'-'+s));if(ce.committed)c++;}return c/N;};
+  const cautious=commitRate(-1), neutral=commitRate(0), bold=commitRate(1);
+  assert.ok(bold>neutral+0.03,`과감(+1)이 균형(0)보다 합류율 높음: ${(bold*100).toFixed(1)}% > ${(neutral*100).toFixed(1)}%`);
+  assert.ok(neutral>cautious+0.03,`균형(0)이 신중(-1)보다 합류율 높음: ${(neutral*100).toFixed(1)}% > ${(cautious*100).toFixed(1)}%`);
+ }
+ // (2) 성향=0(균형)은 기존(성향 도입 전) 공식과 수학적으로 동일 — mkState(temperamentFn 생략) 기반의
+ //     기존 10j~10l 등 섹션이 전부 그대로 통과한다는 사실 자체가 이미 회귀 없음의 직접 증거(가산항이 0).
+ // (3) 자원 우선순위(resource) — A 서포터(slot4, 전령 로밍 조건 슬롯)의 오브젝트 합류율이 성장↔합류에 따라 갈린다.
+ {
+  const N=1500;
+  const joinRate=resourceVal=>{let j=0;for(let s=0;s<N;s++){const st=mkTempState(withResource('A',4,resourceVal));const ce=resolveObjective(st,3,'herald',true,0.3,660,seedRng('f18-obj-'+resourceVal+'-'+s));if(ce.participants.some(p=>p.side==='A'&&p.slot===4))j++;}return j/N;};
+  const growth=joinRate(-1), neutral=joinRate(0), regroup=joinRate(1);
+  assert.ok(regroup>neutral+0.03,`합류형(+1)이 균형(0)보다 오브 합류율 높음: ${(regroup*100).toFixed(1)}% > ${(neutral*100).toFixed(1)}%`);
+  assert.ok(neutral>growth+0.03,`균형(0)이 성장형(-1)보다 오브 합류율 높음: ${(neutral*100).toFixed(1)}% > ${(growth*100).toFixed(1)}%`);
+ }
+ // (4) 성향이 처치 확률(killP) 자체엔 닿지 않는다 — 같은 committed 상태끼리 비교하면 처치율이 성향과 무관해야 한다
+ //     (능력치와 같은 확률식에 중복 가산하지 않는다는 설계 원칙의 직접 검증).
+ {
+  const N=2000;
+  const killRateGivenCommit=engageVal=>{let committed=0,kills=0;for(let s=0;s<N;s++){const st=mkTempState(withEngage('A',1,engageVal));const ce=resolveGank(st,0,0,true,0.6,150,seedRng('f18-killp-'+engageVal+'-'+s));if(ce.committed){committed++;if(ce.kills.length)kills++;}}return committed?kills/committed:0;};
+  const kCautious=killRateGivenCommit(-1), kBold=killRateGivenCommit(1);
+  assert.ok(Math.abs(kCautious-kBold)<0.05,`합류가 실제로 성사된 경우끼리는 처치율이 성향과 거의 무관(중복 가산 없음): 신중 ${(kCautious*100).toFixed(1)}% vs 과감 ${(kBold*100).toFixed(1)}%`);
+ }
+ // (5) 결정성: 같은 시드 + 같은 성향 → 같은 결과.
+ {
+  const st1=mkTempState(withEngage('A',1,0.7)), st2=mkTempState(withEngage('A',1,0.7));
+  const a=resolveGank(st1,0,0,true,0.3,150,seedRng('f18-det')), b=resolveGank(st2,0,0,true,0.3,150,seedRng('f18-det'));
+  assert.equal(JSON.stringify(a),JSON.stringify(b),'같은 시드·같은 성향 → 결정적 동일 결과');
+ }
+}
+
 // --- 10. 단위 5: 공성(resolveSiege) — 구조물 진행 · 종료 · 이중 보상 방지 ---
 {
  const seedRng=tag=>random(hash(tag));

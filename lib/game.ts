@@ -1,4 +1,9 @@
+import {random,hash} from './rng.ts';
 import {travelSeconds} from './simulation/arena.ts';
+import {temperamentOf, labelOf as temperamentLabelOf, shortLabelOf as temperamentShortLabelOf, TEMPERAMENT_LABEL, TEMPERAMENT_BALANCED_BAND, type Temperament, type TemperamentAxis} from './players/temperament.ts';
+export {temperamentOf, temperamentLabelOf, temperamentShortLabelOf, TEMPERAMENT_LABEL, TEMPERAMENT_BALANCED_BAND, type Temperament, type TemperamentAxis};
+import {CHALLENGES, startChallenge, recordObservation, successRate as challengeSuccessRate, type ChallengeId, type ChallengeProgress} from './players/challenges.ts';
+export {CHALLENGES, startChallenge, recordObservation, challengeSuccessRate, type ChallengeId, type ChallengeProgress};
 import {CHAMPIONS, TAG_LABEL, champImageUrl, type Champion, type ChampTag, type ChampType} from './champions.ts';
 import {TEAM_META, FOREIGN_META, TEAM_LOGO, LCK_ROSTER, INTL_ROSTER} from './rosters.ts';
 import {draftEffects,compositionPlan,draftFitScore} from './balance/composition.ts';
@@ -29,7 +34,7 @@ export const domestic=(t:{id:string})=>TEAM_META.some(m=>m.id===t.id);
 export type International={kind:'MIDSEASON'|'WORLD',stage:'SWISS'|'BRACKET'|'DONE',round:number,participants:string[],table:{id:string,wins:number,losses:number,opponents:string[]}[],queue:Match[],matches:Match[],bracket:string[],champion?:string};
 export type Mastery={champ:string,level:number,xp:number};
 export const MASTERY_CAP=4,MASTERY_XP=100,MASTERY_POOL=8;
-export type Player={id:string,name:string,realName:string,role:Role,teamId:string|null,age:number,stats:number[],pot:number[],form:number,burn:number,salary:number,until:number,training:string,trainChamp?:string,mastery:Mastery[],pog:number,growth:number,nextSalary?:number,nextUntil?:number,releasedSeason?:number,kills?:number,deaths?:number,assists?:number};
+export type Player={id:string,name:string,realName:string,role:Role,teamId:string|null,age:number,stats:number[],pot:number[],form:number,burn:number,salary:number,until:number,training:string,trainChamp?:string,mastery:Mastery[],pog:number,growth:number,nextSalary?:number,nextUntil?:number,releasedSeason?:number,kills?:number,deaths?:number,assists?:number,challenge?:ChallengeProgress};
 export type Team={id:string,lineup:Record<Role,string>,familiarity:Record<string,number>,cash:number,fan:number,expected:number,tactic:string,focus:string,wins:number,losses:number,sw:number,sl:number,points:number,staff?:Record<string,number>};
 export type Draft={picksA:string[],picksB:string[],bans:string[],actions:{team:string,kind:string,champ:string}[]};
 export type DraftPick={champ:string,role:Role};
@@ -57,8 +62,7 @@ export const ovr=(p:Player)=>Math.round(avg(p.stats));
 export const kda=(p:Player)=>{const k=p.kills??0,d=p.deaths??0,a=p.assists??0;return d===0?k+a:(k+a)/d;};
 export const money=(v:number)=>(v/10000).toFixed(2)+'억';
 export const meta=(id:string)=>[...TEAM_META,...FOREIGN_META].find(t=>t.id===id)!;
-export function random(seed:number){let a=seed>>>0;return()=>{a+=0x6D2B79F5;let t=a;t=Math.imul(t^t>>>15,t|1);t^=t+Math.imul(t^t>>>7,t|61);return((t^t>>>14)>>>0)/4294967296;};}
-export function hash(s:string){let h=2166136261;for(let i=0;i<s.length;i++)h=Math.imul(h^s.charCodeAt(i),16777619);return h>>>0;}
+export {random,hash};
 const FALLBACK_CHAMP:Champion={id:'?',name:'미상',role:'MID',type:'혼합',tags:[],flex:[]};
 export const champById=(id:string):Champion=>CHAMPIONS.find(c=>c.id===id)??{...FALLBACK_CHAMP,id,name:id};
 export const champName=(id:string):string=>champById(id).name;
@@ -288,6 +292,12 @@ export function simulateSet(g:Game,m:Match,directive?:TacticalChoice):SetResult{
   draft.picksA,draft.picksB,
   (side,slot)=>masteryLevel(side==='A'?sa[slot]:sb[slot],(side==='A'?draft.picksA:draft.picksB)[slot]),
   (side,slot)=>roleFit((side==='A'?draft.picksA:draft.picksB)[slot],ROLES[slot])==='off',
+  (side,slot)=>temperamentOf((side==='A'?sa:sb)[slot].id),
+  (side,slot)=>{
+   const pl=(side==='A'?sa:sb)[slot], ch=pl.challenge;
+   if(!ch||ch.status!=='completed')return {spotReduction:0,objJoinBonus:0};
+   return {spotReduction:ch.id==='safe_commit'?0.03:0,objJoinBonus:ch.id==='obj_priority'?0.03:0};
+  },
  );
  // A node is carried across events; it is never reset to the river after a siege.
  for(const side of ['A','B'] as Side[])for(const c of cs[side])c.navNode=side+'_base';
@@ -586,6 +596,35 @@ function finishMatch(g:Game,m:Match){m.winner=m.scoreA>m.scoreB?m.a:m.b;const a=
    });
   }
   g.scout[tid]=samples.slice(0,SCOUT_CAP);
+ }
+ // F18 Phase C: 성장 과제 관측. 완료된 세트(m.sets)를 이 함수에서 1회만 순회한다 — 리플레이 재생·배속·
+ // 되감기는 클라이언트 애니메이션일 뿐 finishMatch를 다시 부르지 않으므로 중복 관측되지 않는다.
+ for(const pl of roster(g)){
+  if(!pl.challenge||pl.challenge.status!=='active')continue;
+  outer: for(const s of m.sets){
+   if(pl.challenge.id==='safe_commit'){
+    const side=s.lineupA[1]===pl.id?'A':s.lineupB[1]===pl.id?'B':null;
+    if(!side)continue; // 이 세트에 정글로 출전하지 않았으면 관측 기회가 없다(평가 보류로 남는다)
+    for(const e of s.events){
+     const cb=e.combat; if(!cb||cb.kind!=='gank'||cb.side!==side)continue;
+     pl.challenge=recordObservation(pl.challenge,!cb.spotted);
+     if(pl.challenge.status!=='active')break outer;
+    }
+   }else if(pl.challenge.id==='obj_priority'){
+    let mySide:Side|null=null,mySlot=-1;
+    for(let sl=0;sl<5;sl++){ if(s.lineupA[sl]===pl.id){mySide='A';mySlot=sl;break;} if(s.lineupB[sl]===pl.id){mySide='B';mySlot=sl;break;} }
+    if(!mySide)continue;
+    for(const e of s.events){
+     const cb=e.combat; if(!cb||cb.kind!=='objective')continue;
+     const joined=cb.participants.some(r=>r.side===mySide&&r.slot===mySlot);
+     const nj=(cb.notJoined||[]).find(n=>n.ref.side===mySide&&n.ref.slot===mySlot);
+     if(!joined&&nj&&(nj.reason==='이동 중(도착 전)'||nj.reason==='전투 이탈(리스폰 대기)'))continue; // 실제 선택 기회가 아니었음
+     if(!joined&&!nj)continue;
+     pl.challenge=recordObservation(pl.challenge,joined);
+     if(pl.challenge.status!=='active')break outer;
+    }
+   }
+  }
  }}
 // F16: 다음 상대를 준비하는 분석실. 저장된 스카우팅 표본(g.scout, 팀당 최근 SCOUT_CAP세트)만 읽는다 —
 // 진행 중인/다음 경기의 확정 픽·난수·실제 명령은 절대 참조하지 않는다(완료된 과거 세트만).
@@ -635,6 +674,7 @@ function nextYear(g:Game){g.season++;g.offWeek=0;g.phase='OFFSEASON';g.match=nul
  const sorted=g.teams.filter(domestic).map(t=>({id:t.id,value:avg(roster(g,t.id).map(ovr))})).sort((a,b)=>b.value-a.value);g.teams.filter(domestic).forEach(t=>t.expected=sorted.findIndex(x=>x.id===t.id)+1);news(g,`시즌 ${g.season} 스토브리그 개막. 만료 계약과 포지션 공석을 확인하세요.`);}
 function requirePhase(g:Game,phases:string[]){if(!phases.includes(g.phase))throw Error('현재 단계에서는 할 수 없는 작업입니다.');}
 export function applyCommand(source:Game,cmd:Command):Game{const g=upgradeGame(structuredClone(source)),p=cmd.payload??{};switch(cmd.type){
+ case 'assignChallenge':{requirePhase(g,['PLAN']);const x=roster(g).find(x=>x.id===p.id);if(!x)throw Error('선수를 확인해 주세요.');const cid=String(p.challenge);if(!CHALLENGES[cid as ChallengeId])throw Error('성장 과제를 확인해 주세요.');if(x.challenge&&x.challenge.status==='active')throw Error('이미 진행 중인 성장 과제가 있습니다. 완료되거나 종료된 뒤 새로 지정할 수 있습니다.');x.challenge=startChallenge(cid as ChallengeId,g.season);break;}
  case 'training':{requirePhase(g,['PLAN']);const ps=p.id==='all'?roster(g):roster(g).filter(x=>x.id===p.id);if(!TRAININGS.some(t=>t.id===p.training)||!ps.length)throw Error('훈련을 확인해 주세요.');const champ=p.champ!==undefined?String(p.champ):undefined;if(champ){if(!CHAMPIONS.some(c=>c.id===champ))throw Error('특훈할 챔피언을 확인해 주세요.');const full=ps.find(x=>!x.mastery.some(m=>m.champ===champ)&&x.mastery.length>=MASTERY_POOL);if(full)throw Error(`${full.name}의 숙련 챔피언이 ${MASTERY_POOL}칸으로 가득 찼습니다. 기존 숙련 챔피언 중에서 골라 주세요.`);}ps.forEach(x=>{x.training=String(p.training);if(p.champ!==undefined)x.trainChamp=champ||undefined;});break;}
  case 'train':requirePhase(g,['PLAN']);train(g);break;
  case 'strategy':requirePhase(g,['PLAN','PREP']);if(!TACTICS.some(t=>t.id===p.tactic)||!['TOP','MID','BOT'].includes(String(p.focus)))throw Error('전술을 확인해 주세요.');team(g).tactic=String(p.tactic);team(g).focus=String(p.focus);break;

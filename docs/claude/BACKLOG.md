@@ -20,6 +20,7 @@
 | DOC-01 | P2 | TODO | 기존 GDD·README를 현행140종/Lv4/스왑 기준으로 통합 |
 | UI-01 | P2 | TODO | 모바일 밴픽 가독성과 작은 텍스트 개선 |
 | DATA-01 | P3 | TODO | 실존 로스터·챔피언 표기·외부 그림 데이터 검증 |
+| F18 | P1 | IN_PROGRESS | 선수 성향(교전/자원/정보/콜 4축)·성장 과제. Phase A(설계·id 기반 순수 함수, D023)·B(교전·자원 성향을 `resolveGank`/`resolveBotLane`/`resolveObjective` 결정 게이트에 연결)·C(성장 과제 2종 `safe_commit`/`obj_priority`, 완료 효과 1회 상한) 완료. 다음: Phase D(정보·콜 성향을 실제 행동에 연결). 아래 "F18" 절 참조 |
 
 ## TRAIN-01 — 완료 (2026-09-10)
 관련: lib/game.ts의 training/train/gainMastery, app/manager.tsx의 champTrainOptions.
@@ -222,3 +223,27 @@
 
 ## DOC-01 / UI-01 / DATA-01
 기존 기획서에 구현된 사항과 미래 목표를 구분한다. 모바일390px에서 검색/확정/스왑/중계를 직접 확인한다. 현실 선수 데이터는 공식 근거·기준 날짜를 확보한 뒤 변경하고 게임 평가값과 현실 통계를 구분한다. 최신이라는 단어를 출처 없이 붙이지 않는다.
+
+## F18 — 선수의 스타일·성장·컨디션 (2026-09-15/16)
+근거: `docs/claude/PROTOCOL-Claude-Development-Orders.md`의 F18, 사용자가 게임 디자인·구현을 함께 위임하며 준 상세 사양(4축·결정 게이트 전용 연결·id 기반 순수 함수·성장 과제 2종·A→B→C→D 순서). 설계 결정 전체는 `DECISIONS.md`의 **D023** 참조.
+
+### 완료 — Phase A: 성향 4축 설계·데이터 계약 (D023)
+`lib/players/temperament.ts` 신설. `temperamentOf(playerId)`가 순수 함수로 4축(engage/resource/info/call, 각 -1~+1, 삼각분포·평균0)을 계산한다. **저장하지 않는다** — Player 타입에 필드 추가 없음, 구세이브 재추첨 없음, 마이그레이션 불필요, role 인자 자체가 없어 포지션 강제 불가능. `lib/rng.ts` 신설(random/hash를 game.ts에서 분리, 순환 의존 회피). 검증: `tests/temperament.test.mjs`(7섹션 — 안정성·범위·분포·축간 독립성·라벨 경계).
+
+### 완료 — Phase B: 교전·자원 성향의 실제 행동 연결
+`Combatant.temperament` 필드 + `newMatchState`의 선택적 `temperamentFn`(생략 시 전원 균형형=기존과 100% 동일) 신설. 결정 게이트에만 연결, 결과 확률식(처치·오브 확보)은 무변경:
+- **교전 성향(engage)**: `resolveGank`/`resolveBotLane`의 정글러 갱킹 `commitP`에 `±0.08` 가산. 실측(통제 1500시드): 신중 45.9% → 균형 54.4% → 과감 62.7% 합류율.
+- **자원 우선순위(resource)**: `resolveObjective`의 비고정 슬롯(정글·미드 제외) `arriveP`에 `±0.08` 가산. 실측: 성장 40.3% → 균형 49.4% → 합류 57.6%(슬롯·오브젝트 종류에 따라 천장 효과로 폭이 달라질 수 있음, 기록됨).
+검증: `tests/combat.test.mjs` 섹션 9c(균형=기존 동치, 단조 증가, 처치 확률 무관 직접 검정, 결정성).
+
+### 완료 — Phase C: 성장 과제 2종
+`lib/players/challenges.ts` 신설. `Player.challenge?:ChallengeProgress`(선택 필드). 과제 `safe_commit`(무리한 합류 줄이기, JGL 갱킹 발각률↓)·`obj_priority`(오브젝트 합류 늘리기) — 각각 수행 기회·관측 기준·최소 관측(8회)·평가 기간(참고용, 강제 실패 아님)·훈련 비용(활성 과제 1개 제한)·완료 효과(±3%p, 1회 상한)를 전부 명시. 관측은 `finishMatch()`에서 완료된 `m.sets`를 1회만 순회 — 리플레이 재생·배속·되감기로 중복 지급 안 됨(스카우팅·훈련이력과 같은 안전 패턴). 관측 부족은 실패가 아니라 `active` 상태 유지(평가 보류). `assignChallenge` 명령 신설(PLAN 단계, 활성 과제 있으면 재배정 거부). UI: 선수 상세 다이얼로그에 `TemperamentPanel`(성향 4축 요약·강점/주의 상황, info/call은 "아직 경기 행동에 연결 안 됨" 명시)·`ChallengePanel`(진행 근거·배정 버튼) 신설.
+검증: `tests/challenges.test.mjs`(6섹션), 브라우저 확인(`localhost:5174`, 성향/과제 패널 정상 렌더링, 배정 버튼이 PLAN 단계 아니면 올바르게 비활성화됨 확인, 콘솔 에러 없음).
+
+### 다음 — Phase D: 정보 확보·콜 성향 확장
+`info`(안전 확인↔적극 탐색)·`call`(계획 준수↔기회 제안) 축은 설계·라벨·UI까지 있지만 아직 엔진 결정 게이트에 연결 안 됨. 후보 연결점(다음 세션 조사 필요): info는 시야 확보 관련 결정(현재 엔진은 시야를 능력치로만 처리, F10이 미룬 "구역별 시야 상태" 선행 필요 가능성), call은 감독 지시(F12) 관련 선수 개인 반응 편차 또는 팀 콜 타이밍. Phase B/C와 같은 "결정 게이트만, 기존 대비 0 가산 기본값" 원칙 유지할 것.
+
+### 알려진 제한(정직하게 기록)
+- 성장 과제 완료 효과는 `spotReduction`/`objJoinBonus` 두 종류뿐 — 사용자가 예시로 든 "오브젝트 준비 전에 웨이브 정리" 같은 다른 행동 패턴은 이번에 과제로 만들지 않았다(Phase B가 실제로 연결한 행동 2종에만 과제를 묶었다).
+- "실제 경기에서 드러난 사례"(사용자 지시 6번)는 UI에 넣지 않았다 — 성향이 실제로 어떤 사건에서 드러났는지 모아 두는 영구 로그가 없다(F16/F17의 scout/trainingLog 같은 별도 저장 없이는 불가능, 다음 조각으로 이관).
+- 상수(0.08, ±0.03)는 스크래치 스크립트로 실측한 설계 가설이다 — F15급 대규모 시드 스윕(승률 영향 총량 재확인)은 아직 안 함.

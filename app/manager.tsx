@@ -14,7 +14,7 @@ import {Table,TableHeader,TableBody,TableRow,TableHead,TableCell} from '@/compon
 import {Progress} from '@/components/ui/progress';
 import {RadioGroup,RadioGroupItem} from '@/components/ui/radio-group';
 import {Toaster,toast} from 'sonner';
-import {TEAM_META,TEAM_LOGO,ROLES,STAT_NAMES,STAT_KEYS,TACTICS,TRAININGS,CHAMPIONS,TAG_LABEL,meta,team,roster,starters,payroll,staffCost,releaseCost,domestic,synergy,upcoming,standings,ovr,kda,avg,money,champById,champName,champImageUrl,masteryLevel,isMeta,roleFit,MASTERY_CAP,MASTERY_XP,MASTERY_POOL,legalDraftCandidates,draftTurnTeam,DRAFT_ORDER,scoutReport,type Game,type Player,type Command,type Match,type Role,type DraftState} from '@/lib/game';
+import {TEAM_META,TEAM_LOGO,ROLES,STAT_NAMES,STAT_KEYS,TACTICS,TRAININGS,CHAMPIONS,TAG_LABEL,meta,team,roster,starters,payroll,staffCost,releaseCost,domestic,synergy,upcoming,standings,ovr,kda,avg,money,champById,champName,champImageUrl,masteryLevel,isMeta,roleFit,MASTERY_CAP,MASTERY_XP,MASTERY_POOL,legalDraftCandidates,draftTurnTeam,DRAFT_ORDER,scoutReport,temperamentOf,temperamentLabelOf,temperamentShortLabelOf,CHALLENGES,challengeSuccessRate,type Game,type Player,type Command,type Match,type Role,type DraftState,type TemperamentAxis,type ChallengeId} from '@/lib/game';
 
 type View='home'|'roster'|'training'|'strategy'|'match'|'league'|'market'|'records'|'settings'|'staff'|'world';
 type Save={game:Game|null,revision:number,updatedAt?:string,restorePoints?:{revision:number,updatedAt:string}[]};
@@ -68,7 +68,7 @@ export default function Manager(){
  {view==='settings'&&<><Head eyebrow="CAREER SETTINGS" title="설정 및 저장"/><section className="panel settings-panel"><SectionTitle title="커리어 저장" sub="모든 확정 행동은 서버에 저장됩니다. 같은 계정으로 다른 기기에서 이어할 수 있습니다."/><div className="key-value"><span>현재 슬롯</span><b>커리어 {slot}</b></div><div className="key-value"><span>최근 저장</span><b>{save.updatedAt?new Date(save.updatedAt).toLocaleString('ko-KR'):'—'}</b></div><div className="key-value"><span>진행 단계</span><b>시즌 {g.season} · {phaseLabel(g)}</b></div><div className="inline-actions"><Button variant="outline" onClick={()=>load(slot)} disabled={busy}><RefreshCw size={16}/>최신 기록 불러오기</Button><Button variant="outline" onClick={exportSave}><Download size={16}/>기록 JSON 내보내기</Button></div><p className="muted">새 게임은 상단의 다른 커리어 슬롯에서 시작하세요. 현재 기록은 유지됩니다. 내보낸 파일의 다시 불러오기는 이 버전에서 지원하지 않습니다.</p></section><section className="panel settings-panel"><SectionTitle title="자동 복원 지점" sub="최근 3개 행동 이전의 기록입니다. 복원해도 현재 기록은 새 복원 지점으로 남습니다."/>{save.restorePoints?.length?save.restorePoints.map(point=><div className="key-value" key={point.revision}><span>{new Date(point.updatedAt).toLocaleString('ko-KR')}</span><Button size="sm" variant="outline" disabled={busy} onClick={()=>setConfirm({title:'이 기록으로 복원할까요?',text:'선수 상태, 자금, 경기 진행을 해당 시점으로 되돌립니다. 현재 기록은 복원 지점에 보관됩니다.',command:{type:'restoreBackup',payload:{revision:point.revision}}})}>이 시점으로 복원</Button></div>):<p className="muted">다음 행동을 완료하면 복원 지점이 생성됩니다.</p>}</section><section className="panel settings-panel"><SectionTitle title="현재 게임 규칙"/><p>Classic-v1 국내 리그 · 가상 10팀 · 스프링/서머 · 정규 Bo3 · 플레이오프 Bo5 · 자동 밴픽 · 시리즈 사이 전술 변경 · FA/재계약 · 신인과 노화.</p><p className="muted">경기는 온라인에서 진행됩니다. 국제대회·코칭스태프·트레이드를 지원합니다. 수동 밴픽·피어리스·스토어 앱은 포함되지 않습니다. 실제 LCK 규정이나 실존 선수 평가를 재현한 게임이 아닙니다.</p><Button variant="outline" onClick={()=>setHelp(true)}><BookOpen size={16}/>플레이 가이드</Button></section></>}
  </>}
  <footer className="content-footer"><span>PROTOCOL <b>MANAGER</b></span><span>CLASSIC RULESET · 가상 e스포츠 리그</span></footer></main><nav className="mobile-nav" aria-label="빠른 이동">{[{id:'home',icon:LayoutDashboard,label:'감독실'},{id:'roster',icon:Users,label:'선수단'},{id:'match',icon:Swords,label:'경기'},{id:'league',icon:Trophy,label:'리그'},{id:'market',icon:Wallet,label:'계약'}].map(n=><button key={n.id} onClick={()=>nav(n.id as View)} className={view===n.id?'active':''}><n.icon size={20}/>{n.label}</button>)}</nav></SidebarInset>
- <Dialog open={!!detail} onOpenChange={v=>!v&&setDetail(null)}><DialogContent className="player-dialog"><DialogHeader><DialogTitle>{detail?.name} <Badge>{detail?.role}</Badge></DialogTitle><DialogDescription>{detail?.realName} · {detail?.age}세 · {detail?.teamId?meta(detail.teamId).name:'자유계약 선수'}</DialogDescription></DialogHeader>{detail&&<><div className="player-detail-hero"><div className={`player-monogram role-${detail.role}`}>{detail.name[0]}</div><div><span className="muted">OVERALL</span><strong>{ovr(detail)}</strong><p>성장 여력 {avg(detail.pot)-avg(detail.stats)>12?'높음':'보통'} · {detail.pog} POG</p></div></div><div className="stats-grid">{STAT_KEYS.map((s,i)=><div key={s}><span>{STAT_NAMES[i]}<small>{s}</small></span><b>{Math.round(detail.stats[i])}</b><Progress value={detail.stats[i]}/></div>)}</div><div className="detail-champs"><h3>숙련 챔피언</h3>{detail.mastery.map(mm=><span key={mm.champ} className="mastery-item"><Champ id={mm.champ} hot={!!g&&isMeta(g,mm.champ)}/><b>Lv.{mm.level}{mm.level<MASTERY_CAP?<em> {mm.xp}/{MASTERY_XP}</em>:<em> MAX</em>}</b></span>)}</div><div className="detail-footer"><span>폼 <b>{Math.round(detail.form)}</b></span><span>번아웃 <b className={detail.burn>=70?'danger':''}>{Math.round(detail.burn)}</b></span><span>연봉 <b>{money(detail.salary)}</b></span></div>{g&&detail.teamId===g.teamId&&own!.lineup[detail.role]!==detail.id&&<Button className="primary-button" disabled={busy||!['PLAN','PREP','OFFSEASON'].includes(g.phase)} onClick={()=>act({type:'lineup',payload:{id:detail.id}})}>선발 등록</Button>}</>}</DialogContent></Dialog>
+ <Dialog open={!!detail} onOpenChange={v=>!v&&setDetail(null)}><DialogContent className="player-dialog"><DialogHeader><DialogTitle>{detail?.name} <Badge>{detail?.role}</Badge></DialogTitle><DialogDescription>{detail?.realName} · {detail?.age}세 · {detail?.teamId?meta(detail.teamId).name:'자유계약 선수'}</DialogDescription></DialogHeader>{detail&&<><div className="player-detail-hero"><div className={`player-monogram role-${detail.role}`}>{detail.name[0]}</div><div><span className="muted">OVERALL</span><strong>{ovr(detail)}</strong><p>성장 여력 {avg(detail.pot)-avg(detail.stats)>12?'높음':'보통'} · {detail.pog} POG</p></div></div><div className="stats-grid">{STAT_KEYS.map((s,i)=><div key={s}><span>{STAT_NAMES[i]}<small>{s}</small></span><b>{Math.round(detail.stats[i])}</b><Progress value={detail.stats[i]}/></div>)}</div><div className="detail-champs"><h3>숙련 챔피언</h3>{detail.mastery.map(mm=><span key={mm.champ} className="mastery-item"><Champ id={mm.champ} hot={!!g&&isMeta(g,mm.champ)}/><b>Lv.{mm.level}{mm.level<MASTERY_CAP?<em> {mm.xp}/{MASTERY_XP}</em>:<em> MAX</em>}</b></span>)}</div><TemperamentPanel p={detail}/><ChallengePanel p={detail} g={g} busy={busy} act={act}/><div className="detail-footer"><span>폼 <b>{Math.round(detail.form)}</b></span><span>번아웃 <b className={detail.burn>=70?'danger':''}>{Math.round(detail.burn)}</b></span><span>연봉 <b>{money(detail.salary)}</b></span></div>{g&&detail.teamId===g.teamId&&own!.lineup[detail.role]!==detail.id&&<Button className="primary-button" disabled={busy||!['PLAN','PREP','OFFSEASON'].includes(g.phase)} onClick={()=>act({type:'lineup',payload:{id:detail.id}})}>선발 등록</Button>}</>}</DialogContent></Dialog>
  <Dialog open={!!confirm} onOpenChange={v=>!v&&setConfirm(null)}><DialogContent><DialogHeader><DialogTitle>{confirm?.title}</DialogTitle><DialogDescription>{confirm?.text}</DialogDescription></DialogHeader><div className="dialog-actions"><Button variant="outline" onClick={()=>setConfirm(null)} disabled={busy}>취소</Button><Button className="primary-button" disabled={busy} onClick={()=>confirm&&act(confirm.command)}>{confirm?.command.type==='restoreBackup'?'기록 복원':'계약 확정'}</Button></div></DialogContent></Dialog>
  <Dialog open={help} onOpenChange={setHelp}><DialogContent className="help-dialog"><DialogHeader><DialogTitle>감독의 첫 시즌</DialogTitle><DialogDescription>선수의 성장은 훈련에서, 승리의 해답은 리캡에서 찾으세요.</DialogDescription></DialogHeader><ol className="guide-list"><li><b>훈련을 계획하세요.</b><p>매주 한 번 성장 또는 휴식을 선택합니다. 번아웃 90 이상인 선수는 다음 매치에 출전할 수 없습니다.</p></li><li><b>우리 팀의 강점을 정하세요.</b><p>초반 압박, 운영, 후반 집중, 균형 중 선택합니다. 세트 사이에는 전술과 선발을 바꿀 수 있습니다.</p></li><li><b>밴픽을 확인하고 경기를 시작하세요.</b><p>합법적인 밴픽과 이벤트를 자동 계산합니다. 재생 속도와 스킵은 결과에 영향을 주지 않습니다.</p></li><li><b>패배의 원인을 다음 선택으로.</b><p>리캡에서 라인·오브젝트·한타의 파워 격차와 확률을 확인하세요.</p></li><li><b>여러 시즌에 걸쳐 팀을 만드세요.</b><p>상위 6팀이 플레이오프에 진출합니다. 국내 성적으로 미드시즌·월드 진출을 노리세요. 월드 종료 후 FA·트레이드·재계약으로 다음 시즌을 준비합니다.</p></li></ol><p className="guide-note">온라인 자동 저장 · 가상 10팀과 선수 · 국내 리그 · 미드시즌 · 월드 챔피언십</p></DialogContent></Dialog><Toaster theme="dark" position="top-center" richColors/></SidebarProvider>;
 }
@@ -88,6 +88,57 @@ function DraftSummary({g,match,busy,act,onPlayer}:DraftProps){
  </div>;
 }
 
+// F18: 선수 성향 표시. engage/resource는 실제 엔진 행동(정글 합류·오브젝트 합류)에 연결돼 있다.
+// info/call은 F18 지시서의 설계 정의만 있고 아직 엔진 행동에 연결 안 됨 — 완성된 기능처럼 보이지
+// 않게 명시적으로 "아직 경기 행동에 연결 안 됨" 배지를 붙인다.
+const AXIS_LABEL:Record<TemperamentAxis,string>={engage:'교전 성향',resource:'자원 우선순위',info:'정보 확보 성향',call:'콜 성향'};
+const TEMPERAMENT_COPY:Record<TemperamentAxis,{connected:boolean,hi:{s:string,r:string},lo:{s:string,r:string},mid:string}>={
+ engage:{connected:true,
+  hi:{s:'교전 기회가 보이면 놓치지 않고 들어갑니다.',r:'인원·시야가 부족해도 진입할 수 있습니다.'},
+  lo:{s:'불리한 교전을 피해 손실을 줄입니다.',r:'짧은 진입 기회를 놓칠 수 있습니다.'},
+  mid:'상황에 따라 유연하게 교전 여부를 판단합니다.'},
+ resource:{connected:true,
+  hi:{s:'팀 오브젝트·한타 합류에 적극적입니다.',r:'개인 성장과 라인 웨이브를 포기할 수 있습니다.'},
+  lo:{s:'라인·정글 자원을 안정적으로 확보합니다.',r:'합류가 늦어질 수 있습니다.'},
+  mid:'성장과 합류 사이에서 유연하게 판단합니다.'},
+ info:{connected:false,
+  hi:{s:'시야·정보를 적극적으로 확보하려 합니다.',r:'노출·이동 시간의 위험이 있습니다.'},
+  lo:{s:'생존과 현재 위치를 지키려 합니다.',r:'정보 확보 범위가 제한될 수 있습니다.'},
+  mid:'정보 확보에서 유연하게 판단합니다.'},
+ call:{connected:false,
+  hi:{s:'새로운 운영 기회를 팀에 제안하려 합니다.',r:'팀이 준비되지 않으면 움직임이 갈릴 수 있습니다.'},
+  lo:{s:'일관된 팀 움직임을 유지하려 합니다.',r:'돌발 기회 대응이 늦을 수 있습니다.'},
+  mid:'상황에 따라 유연하게 판단합니다.'},
+};
+function TemperamentPanel({p}:{p:Player}){
+ const t=temperamentOf(p.id);
+ return <div className="temperament-panel">
+  <SectionTitle title="성향" sub="능력치와 별개로 '무엇을 선택하려는가'를 나타냅니다. 균형형은 특정 방향으로 치우치지 않습니다."/>
+  <div className="temperament-list">{(Object.keys(AXIS_LABEL) as TemperamentAxis[]).map(ax=>{
+   const v=t[ax], label=temperamentShortLabelOf(ax,v), copy=TEMPERAMENT_COPY[ax];
+   const dir:'hi'|'lo'|'mid'=v>=0.34?'hi':v<=-0.34?'lo':'mid';
+   return <div key={ax} className="temperament-row">
+    <div className="temperament-row-head"><span>{AXIS_LABEL[ax]}</span><b>{label}</b>{!copy.connected&&<em className="temperament-pending">아직 경기 행동에 연결 안 됨</em>}</div>
+    {dir==='mid'?<p className="muted">{copy.mid}</p>:<><p><CheckCircle2 size={13}/> 강점을 발휘하기 좋은 상황: {copy[dir].s}</p><p><TriangleAlert size={13}/> 주의할 상황: {copy[dir].r}</p></>}
+   </div>;
+  })}</div>
+ </div>;
+}
+// F18 Phase C: 성장 과제 표시 + 배정(선수당 활성 과제 1개). 사용자 팀 로스터에서만 배정 가능.
+function ChallengePanel({p,g,busy,act}:{p:Player,g:Game|null,busy:boolean,act:(c:Command)=>Promise<Game|null>}){
+ const ch=p.challenge;
+ const mine=!!g&&p.teamId===g.teamId;
+ return <div className="challenge-panel">
+  <SectionTitle title="성장 과제" sub="선수당 활성 과제는 1개입니다. 관측이 부족하면 실패가 아니라 평가 보류로 남습니다."/>
+  {ch?<div className="challenge-active">
+   <div className="challenge-active-head"><b>{CHALLENGES[ch.id].name}</b><Badge tone={ch.status==='completed'?'lime':ch.status==='failed'?'red':'muted'}>{ch.status==='completed'?'완료':ch.status==='failed'?'미완(다시 지정 가능)':ch.observations.length<CHALLENGES[ch.id].minObservations?'평가 보류':'진행 중'}</Badge></div>
+   <p className="muted">{CHALLENGES[ch.id].summary}</p>
+   <p>진행 근거: 관측 {ch.observations.length}/{CHALLENGES[ch.id].minObservations}회{ch.observations.length>0?` · 성공률 ${Math.round((challengeSuccessRate(ch)??0)*100)}%(임계값 ${Math.round(CHALLENGES[ch.id].successThreshold*100)}%)`:''}</p>
+   <p className="muted">효과: {CHALLENGES[ch.id].effect}</p>
+  </div>:<p className="muted">지정된 성장 과제가 없습니다.</p>}
+  {mine&&(!ch||ch.status!=='active')&&<div className="challenge-assign">{(Object.keys(CHALLENGES) as ChallengeId[]).map(id=><Button key={id} variant="outline" size="sm" disabled={busy||!g||g.phase!=='PLAN'} onClick={()=>act({type:'assignChallenge',payload:{id:p.id,challenge:id}})}>{CHALLENGES[id].name} 지정</Button>)}</div>}
+ </div>;
+}
 // F16: 다음 상대를 준비하는 분석실. 완료된 과거 세트 요약(g.scout)만 보여준다 — 다음 경기의 확정
 // 픽·난수·실제 명령은 참조하지 않는다. 표본이 없으면(첫 맞대결) 조용히 아무것도 렌더링하지 않는다.
 function ScoutPanel({g,oppId}:{g:Game,oppId:string}){

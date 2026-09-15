@@ -1,5 +1,7 @@
 import {travelSeconds} from './arena.ts';
 import {battlePlan} from '../balance/composition.ts';
+import type {Temperament} from '../players/temperament.ts'; // 타입 전용 — 런타임 순환 없음
+import {TEMPERAMENT_BALANCED_BAND} from '../players/temperament.ts';
 // 참여자 기반 전투 — ABIL-01 Phase 3 + 중계 상세 전투(같은 작업).
 //
 // 경기 스켈레톤(simulateSet의 9구간 승패 롤)은 그대로 둔다. 각 구간 "안에서" 실제 참여 선수,
@@ -24,6 +26,10 @@ export type Combatant={
  region:Region, freeAt:number,             // 이동↔전투 참여 단일 계약(D022): 마지막으로 확인된 위치 ·
                                             // 그 위치에서 이동을 시작할 수 있는 시각(직전 행동이 끝난 시각).
                                             // hasArrived()가 다음 사건 참여 자격을 이 값들로만 판정한다.
+ temperament:Temperament,                  // F18: "무엇을 선택하려는가"만 다룬다. 능력(eff())과 같은 확률식에
+                                            // 중복 가산하지 않는다 — 결정 게이트(참여·합류 여부)에서만 쓴다.
+ challengeBonus:{spotReduction:number,objJoinBonus:number}, // F18 Phase C: 성장 과제 완료 효과(능력 카테고리,
+                                            // 성향과 별개 — 상한 있게 game.ts가 계산해 넘긴다. 기본 {0,0}).
 };
 export type Ref={side:Side,slot:number};
 export type KillRec={killer:Ref,victim:Ref,assists:Ref[],clock:number};
@@ -78,17 +84,23 @@ export type MatchState={
 
 type StarterLike={stats:number[],name:string,role:string};
 
+const NEUTRAL_TEMPERAMENT:Temperament={engage:0,resource:0,info:0,call:0};
+const NEUTRAL_CHALLENGE_BONUS={spotReduction:0,objJoinBonus:0};
 export function newMatchState(
  aStarters:StarterLike[], bStarters:StarterLike[],
  aPicks:string[], bPicks:string[],
  masteryFn:(side:Side,slot:number)=>number,
  offRoleFn:(side:Side,slot:number)=>boolean,
+ temperamentFn:(side:Side,slot:number)=>Temperament=()=>NEUTRAL_TEMPERAMENT, // 없으면(구 호출부·테스트) 전원 균형형 — 기존 결과와 100% 동일
+ challengeFn:(side:Side,slot:number)=>{spotReduction:number,objJoinBonus:number}=()=>NEUTRAL_CHALLENGE_BONUS, // 없으면 전원 보너스 0
 ):MatchState{
  const mk=(side:Side,st:StarterLike[],picks:string[]):Combatant[]=>st.map((p,slot)=>({
   side,slot,role:p.role,champ:picks[slot]??'',player:p.name,stats:p.stats.slice(),
   mastery:masteryFn(side,slot),off:offRoleFn(side,slot),
   alive:true,respawnAt:0,kills:0,deaths:0,assists:0,gold:0,
   region:'base' as Region,freeAt:0,
+  challengeBonus:challengeFn(side,slot),
+  temperament:temperamentFn(side,slot),
  }));
  return {A:mk('A',aStarters,aPicks),B:mk('B',bStarters,bPicks),firstKillDone:false,lastGankSeq:null,jglCommits:{A:0,B:0},pendingObjective:null,
   clock:0,struct:{A:[0,0,0],B:[0,0,0]},baseTurrets:{A:2,B:2},nexus:{A:false,B:false},lanePush:{A:[0,0,0],B:[0,0,0]},wave:{A:[0,0,0],B:[0,0,0]},region:{A:'base',B:'base'},events:[]};
@@ -129,6 +141,11 @@ export function reviveByClock(st:MatchState,clock:number){
 }
 
 const KILL_G=300, ASSIST_G=150, CS_HEAVY=150, CS_LIGHT=110, DEATH_G=210;
+// F18: 성향은 "무엇을 선택하려는가"만 바꾼다 — 결정 게이트(합류할지·합류를 향할지)에만 더하고,
+// 처치·생존 같은 결과 확률식(atk/dfn/killP)에는 절대 닿지 않는다(능력치와 중복 가산 금지).
+// 첫 값은 보수적 설계 가설이며 실측 검증 전이다(§8, DECISIONS.md 참조) — 임계값을 승률에 맞춰 조용히 올리지 않는다.
+const ENGAGE_TRAIT_W=0.08;
+const RESOURCE_TRAIT_W=0.08;
 
 // 2대1 갱킹(탑=0 / 미드=1). 스켈레톤이 넘긴 phaseWinner(wa: A가 이 구간 우위)와 margin(0~1)으로
 // "어떻게" 이겼는지 결정한다: 킬 / 합류했으나 놓침 / 발각·무산 / 순수 라인 판정. 참여자·처치·자원은
@@ -142,13 +159,16 @@ export function resolveGank(
  const attLaner=st[winSide][laneSlot], attJgl=st[winSide][1], defLaner=st[loseSide][laneSlot];
 
  // 정글 합류 확률: 이니시 능력↑, margin↑일수록 크고, 공격 라이너가 이미 라인을 크게 이기면 갱킹 필요↓
+ // F18: 정글러의 교전 성향(engage)이 "합류할지 말지"를 조정한다 — 능력(eff)이나 처치 확률은 안 건드린다.
  const laneEdge=(eff(attLaner,S_LNE)-eff(defLaner,S_LNE))/40;
- const commitP=clamp01(0.30+0.42*margin+(eff(attJgl,S_TF)-55)/120-Math.max(0,laneEdge)*0.22);
+ const commitP=clamp01(0.30+0.42*margin+(eff(attJgl,S_TF)-55)/120-Math.max(0,laneEdge)*0.22+attJgl.temperament.engage*ENGAGE_TRAIT_W);
  const committed=attJgl.alive && crng()<commitP;
  const followUp=committed && st.jglCommits[winSide]>=1;
  if(committed) st.jglCommits[winSide]++;
  // 수비가 정글 동선을 읽었나 = 수비 시야
- const spotP=committed?clamp01(0.14+(eff(defLaner,S_VIS)-52)/110):0;
+ // F18 Phase C: "무리한 합류 줄이기" 과제 완료 효과(능력 카테고리, 1회 상한) — attJgl.challengeBonus는
+ // game.ts가 계산해 넘긴 값이라 여기선 그대로 빼기만 한다(성향과 다른 채널, eff()엔 안 닿음).
+ const spotP=committed?clamp01(0.14+(eff(defLaner,S_VIS)-52)/110-attJgl.challengeBonus.spotReduction):0;
  const spotted=crng()<spotP;
  // 처치 확률: 공격측(합류 시 정글 이니시 + 라이너 수행) vs 수비(회피 + 탈출 여지)
  const atk=(committed&&!spotted?eff(attJgl,S_TF)*0.5:0)+eff(attLaner,S_MEC)*0.5+eff(attLaner,S_LNE)*0.2;
@@ -161,6 +181,9 @@ export function resolveGank(
  const kills:KillRec[]=[]; const escaped:Ref[]=[]; let firstBlood=false;
  const ev:string[]=[`${lane===0?'탑':'미드'} — ${attLaner.player}(${attLaner.champ}) vs ${defLaner.player}(${defLaner.champ})`];
  if(committed) ev.push(spotted?`정글 ${attJgl.player} 합류 시도, 수비가 시야로 확인`:`정글 ${attJgl.player} 합류`);
+ // F18: 성향 때문에 선택이 달라졌다고 볼 근거(극단 성향 + 실제로 그 방향의 선택)만 남긴다.
+ if(committed&&attJgl.temperament.engage>=TEMPERAMENT_BALANCED_BAND) ev.push(`${attJgl.player}의 과감한 성향 — 망설이지 않고 합류`);
+ else if(!committed&&attJgl.alive&&attJgl.temperament.engage<=-TEMPERAMENT_BALANCED_BAND&&margin>0.25) ev.push(`${attJgl.player}의 신중한 성향 — 확실하지 않은 합류는 미룸`);
 
  if(kill){
   const dbl=margin>0.30 && crng()<0.32;
@@ -222,10 +245,11 @@ export function resolveBotLane(
  const wAdc=st[winSide][3], wSup=st[winSide][4], wJgl=st[winSide][1];
  const lAdc=st[loseSide][3], lSup=st[loseSide][4];
 
- const committed=wJgl.alive && crng()<clamp01(0.22+0.40*margin+(eff(wJgl,S_TF)-55)/135);
+ // F18: 정글러의 교전 성향(engage)이 바텀 합류 판단에도 같은 크기로 반영된다(처치 확률은 그대로).
+ const committed=wJgl.alive && crng()<clamp01(0.22+0.40*margin+(eff(wJgl,S_TF)-55)/135+wJgl.temperament.engage*ENGAGE_TRAIT_W);
  const followUp=committed && st.jglCommits[winSide]>=1;
  if(committed) st.jglCommits[winSide]++;
- const spotted=committed && crng()<clamp01(0.12+(eff(lSup,S_VIS)-52)/120);
+ const spotted=committed && crng()<clamp01(0.12+(eff(lSup,S_VIS)-52)/120-wJgl.challengeBonus.spotReduction);
 
  const atk=eff(wAdc,S_MEC)*0.4+eff(wAdc,S_CAR)*0.25+eff(wSup,S_TF)*0.3+eff(wSup,S_VIS)*0.15
    +(committed&&!spotted?eff(wJgl,S_TF)*0.5:0);
@@ -239,6 +263,8 @@ export function resolveBotLane(
  const kills:KillRec[]=[]; const escaped:Ref[]=[]; let firstBlood=false;
  const ev:string[]=[`바텀 — ${wAdc.player}·${wSup.player} vs ${lAdc.player}·${lSup.player}`];
  if(committed) ev.push(spotted?`정글 ${wJgl.player} 합류를 시야로 확인`:`정글 ${wJgl.player} 합류`);
+ if(committed&&wJgl.temperament.engage>=TEMPERAMENT_BALANCED_BAND) ev.push(`${wJgl.player}의 과감한 성향 — 망설이지 않고 합류`);
+ else if(!committed&&wJgl.alive&&wJgl.temperament.engage<=-TEMPERAMENT_BALANCED_BAND&&margin>0.25) ev.push(`${wJgl.player}의 신중한 성향 — 확실하지 않은 합류는 미룸`);
 
  const registerKill=(victim:Combatant,primary:Combatant,assistList:Combatant[])=>{
   victim.alive=false; victim.deaths++; victim.respawnAt=clock+RESPAWN(clock); primary.kills++;
@@ -324,11 +350,13 @@ export function resolveObjective(
    const laneGap=c.gold-st[opp(side)][slot].gold; // + = 이 슬롯이 우세
    let arriveP:number;
    if(!hasArrived(c,'river',clock,kind==='herald'?'baron':'dragon')){notJoined.push({ref:{side,slot},reason:'이동 중(도착 전)'});return;}
+   // F18: 정글·미드는 이미 오브 근처라 성향이 끼어들 여지가 적다(값 고정 유지). 그 외 슬롯만
+   // 자원 우선순위 성향(resource: 성장↔합류)이 "합류할지" 판단에 더해진다 — 확보 전력(power())엔 안 닿는다.
    if(slot===1) arriveP=0.99;              // 정글: 오브 주변, 거의 확정
    else if(slot===2) arriveP=0.9;           // 미드: 중앙, 대체로 합류
-   else arriveP=clamp01(base+laneGap/900+(eff(c,S_TF)-55)/230);
+   else arriveP=clamp01(base+laneGap/900+(eff(c,S_TF)-55)/230+c.temperament.resource*RESOURCE_TRAIT_W+c.challengeBonus.objJoinBonus);
    if(crng()<arriveP) joined.push(slot);
-   else notJoined.push({ref:{side,slot},reason:laneGap<-150?'라인 처리':'도착 지연'});
+   else notJoined.push({ref:{side,slot},reason:laneGap<-150?'라인 처리':c.temperament.resource<=-TEMPERAMENT_BALANCED_BAND?'라인 잔류(성장 성향)':'도착 지연'});
   };
   for(const s of baseSlots) consider(s,0.9);
   consider(condSlot,0.42);

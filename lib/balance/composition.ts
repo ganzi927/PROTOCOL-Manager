@@ -29,42 +29,46 @@ export type CompProfile={
  early:number;    // 초반 주도권(−면 취약)
  late:number;     // 후반 캐리력
  sideline:number; // 사이드 라인 단독 운영·스플릿 푸시(F05, 2026-09-15 신설 축) — 기존 4태그엔 없던 축.
+ pick:number;     // 픽/매복 — 교전 전 장거리 구속·고립으로 단일 대상을 끊어내는 능력(F06, 2026-09-15 신설 축).
+                   // engage(팀 전체를 몰아넣는 강제 교전)와 다르다 — 픽은 상대 보호가 약할 때 교전 자체를 시작하기 전에 이득을 본다.
 };
 
 // F05(2026-09-15): 태그 2개만으로는 "포킹 사거리가 있는가"와 "혼자 사이드를 압박할 수 있는가"를
 // 구분하지 못한다(예: 기존 데이터의 피오라는 poke 태그를 가졌지만 실제로는 원거리 견제 수단이 없는
 // 근접 듀얼리스트다 — 이 버그가 F05가 지목한 "사이드 운영 챔피언이 포킹 조합으로 오분류"의 실제 사례).
-// 대표 20종의 프로필을 전면 재정의(태그 파생이 아니라 챔피언별 수동 값)해 먼저 검수한다. 나머지 120종은
+// 대표 21종(F06에서 블리츠크랭크 추가)의 프로필을 전면 재정의(태그 파생이 아니라 챔피언별 수동 값)해
+// 먼저 검수한다. 나머지 119종은
 // 기존 태그 파생 계산으로 계속 폴백 — 완전히 새로 만든 게 아니라 기존 값 유지, 이 표는 점진적으로 확대한다.
 // 출처: 공식 롤 챔피언 스킬셋(클로드 학습 데이터 기준, 검수일 2026-09-15) — 특정 패치 수치가 아니라
 // "원거리 견제 수단이 있는가/근접인가/스플릿에 강한 단독 생존기가 있는가" 같은 안정적인 정체성만 반영했다.
 // 외부 승률 데이터가 아니라 게임 내 설계값이라는 원칙(파일 상단 주석)은 유지한다.
 const CURATED:Record<string,CompProfile>={
  // TOP
- Tfiora:{engage:.3,peel:0,poke:0,scale:.8,frontline:.1,range:-.3,early:.1,late:.5,sideline:1.3}, // 근접 듀얼리스트, 궁극(급소)은 원거리 견제가 아니라 처형·생존기 — 사이드 1v1 최상위
- Tcamille:{engage:.5,peel:.1,poke:0,scale:.5,frontline:.3,range:-.2,early:.2,late:.3,sideline:1.1}, // 궁극은 단일 대상 고립(픽)이지 팀 광역 이니시가 아님 — 스플릿·사이드 픽 위주
- Tmalphite:{engage:1.3,peel:.5,poke:0,scale:.1,frontline:1.0,range:-.2,early:.1,late:0,sideline:-.3}, // 광역 스턴 궁극 — 팀에 붙어야 가치가 남, 사이드 운영엔 약함
- Tjax:{engage:.3,peel:.1,poke:0,scale:1.0,frontline:.5,range:-.2,early:-.1,late:.7,sideline:1.0}, // 궁극은 반격형(대상 대응) — 성장형 스플릿 듀얼리스트
+ Tfiora:{engage:.3,peel:0,poke:0,scale:.8,frontline:.1,range:-.3,early:.1,late:.5,sideline:1.3,pick:0}, // 근접 듀얼리스트, 궁극(급소)은 원거리 견제가 아니라 처형·생존기 — 사이드 1v1 최상위
+ Tcamille:{engage:.5,peel:.1,poke:0,scale:.5,frontline:.3,range:-.2,early:.2,late:.3,sideline:1.1,pick:.7}, // 궁극은 벽으로 단일 대상을 고립시키는 진짜 픽 수단 — 팀 광역 이니시가 아니라 스플릿·사이드 픽 위주
+ Tmalphite:{engage:1.3,peel:.5,poke:0,scale:.1,frontline:1.0,range:-.2,early:.1,late:0,sideline:-.3,pick:0}, // 광역 스턴 궁극 — 팀에 붙어야 가치가 남, 사이드 운영·픽엔 약함
+ Tjax:{engage:.3,peel:.1,poke:0,scale:1.0,frontline:.5,range:-.2,early:-.1,late:.7,sideline:1.0,pick:0}, // 궁극은 반격형(대상 대응) — 성장형 스플릿 듀얼리스트
  // JGL
- Jvi:{engage:1.2,peel:.2,poke:0,scale:.3,frontline:.6,range:-.2,early:.3,late:.1,sideline:-.1}, // 단일 대상 고정 돌진 — 팀 이니시 특화
- Jzac:{engage:1.1,peel:.4,poke:0,scale:.3,frontline:.9,range:-.1,early:.1,late:0,sideline:-.2}, // 광역 바운스 이니시, 최상위 내구
- Jgraves:{engage:.2,peel:0,poke:.2,scale:.5,frontline:0,range:.2,early:.4,late:.2,sideline:.4}, // 원거리 포킹이 아니라 중거리 버스트 스커미셔 — 기존 poke 태그보다 훨씬 약한 견제
- Jivern:{engage:.1,peel:.9,poke:0,scale:.2,frontline:.2,range:0,early:.2,late:-.2,sideline:-.3}, // 전투력 최소, 오브젝트 보조·아군 보호 전담 유틸
+ Jvi:{engage:1.2,peel:.2,poke:0,scale:.3,frontline:.6,range:-.2,early:.3,late:.1,sideline:-.1,pick:.3}, // 단일 대상 고정 돌진 — 팀 이니시 특화, 이니시 전 고립 용도로도 일부 쓰임
+ Jzac:{engage:1.1,peel:.4,poke:0,scale:.3,frontline:.9,range:-.1,early:.1,late:0,sideline:-.2,pick:0}, // 광역 바운스 이니시, 최상위 내구
+ Jgraves:{engage:.2,peel:0,poke:.2,scale:.5,frontline:0,range:.2,early:.4,late:.2,sideline:.4,pick:0}, // 원거리 포킹이 아니라 중거리 버스트 스커미셔 — 기존 poke 태그보다 훨씬 약한 견제
+ Jivern:{engage:.1,peel:.9,poke:0,scale:.2,frontline:.2,range:0,early:.2,late:-.2,sideline:-.3,pick:0}, // 전투력 최소, 오브젝트 보조·아군 보호 전담 유틸
  // MID
- Mxerath:{engage:0,peel:0,poke:1.4,scale:.4,frontline:-.6,range:1.2,early:.2,late:.1,sideline:-.2}, // 최장거리 진짜 포킹 메이지, 근접 교전 최약체
- Myasuo:{engage:.4,peel:.1,poke:0,scale:.6,frontline:.2,range:-.3,early:-.1,late:.5,sideline:.6}, // 근접 콤보형, 원거리 견제 수단 없음
- Mazir:{engage:.1,peel:.1,poke:1.2,scale:.8,frontline:-.4,range:1.0,early:-.2,late:.4,sideline:.3}, // 소환 병사로 공성·사거리 극대화, 병사로 사이드 라인 관리도 가능
- Mzed:{engage:.3,peel:0,poke:0,scale:.5,frontline:-.3,range:-.3,early:.2,late:.3,sideline:.5}, // 근접 단일 픽 암살, 원거리 견제 없음
+ Mxerath:{engage:0,peel:0,poke:1.4,scale:.4,frontline:-.6,range:1.2,early:.2,late:.1,sideline:-.2,pick:.3}, // 최장거리 진짜 포킹 메이지, 근접 교전 최약체. 사거리가 길어 픽에도 일부 쓰임
+ Myasuo:{engage:.4,peel:.1,poke:0,scale:.6,frontline:.2,range:-.3,early:-.1,late:.5,sideline:.6,pick:0}, // 근접 콤보형, 원거리 견제 수단 없음
+ Mazir:{engage:.1,peel:.1,poke:1.2,scale:.8,frontline:-.4,range:1.0,early:-.2,late:.4,sideline:.3,pick:.2}, // 소환 병사로 공성·사거리 극대화, 병사로 사이드 라인 관리도 가능
+ Mzed:{engage:.3,peel:0,poke:0,scale:.5,frontline:-.3,range:-.3,early:.2,late:.3,sideline:.5,pick:.6}, // 근접 단일 픽 암살 — 점멸·궁극으로 고립된 대상을 원거리에서 처형
  // ADC
- Acaitlyn:{engage:0,peel:0,poke:1.3,scale:.5,frontline:-.5,range:1.3,early:.4,late:.2,sideline:.5}, // 최장거리 원딜 포킹 + 트랩으로 사이드 라인 관리
- Avayne:{engage:0,peel:0,poke:0,scale:1.2,frontline:-.2,range:-.4,early:-.3,late:.9,sideline:.5}, // 근접 지속딜 원딜 — 기존 poke 태그 부정확, 실제로는 사이드 1v1형
- Ajinx:{engage:0,peel:0,poke:.7,scale:1.2,frontline:-.4,range:.7,early:-.4,late:1.0,sideline:-.2}, // 원거리+지속딜 하이브리드, 극후반 캐리, 혼자면 취약
- Akalista:{engage:.6,peel:0,poke:.4,scale:.4,frontline:-.3,range:.4,early:.3,late:.1,sideline:.1}, // 궁극으로 아군과 동반 돌진 — 포킹+이니시 혼합형 픽 챔피언
+ Acaitlyn:{engage:0,peel:0,poke:1.3,scale:.5,frontline:-.5,range:1.3,early:.4,late:.2,sideline:.5,pick:.4}, // 최장거리 원딜 포킹 + 트랩·궁극 저격으로 사이드 라인 관리와 픽 모두 가능
+ Avayne:{engage:0,peel:0,poke:0,scale:1.2,frontline:-.2,range:-.4,early:-.3,late:.9,sideline:.5,pick:0}, // 근접 지속딜 원딜 — 기존 poke 태그 부정확, 실제로는 사이드 1v1형
+ Ajinx:{engage:0,peel:0,poke:.7,scale:1.2,frontline:-.4,range:.7,early:-.4,late:1.0,sideline:-.2,pick:0}, // 원거리+지속딜 하이브리드, 극후반 캐리, 혼자면 취약
+ Akalista:{engage:.6,peel:0,poke:.4,scale:.4,frontline:-.3,range:.4,early:.3,late:.1,sideline:.1,pick:.5}, // 궁극으로 아군과 동반 돌진해 대상을 고립·저지 — 포킹+이니시+픽 혼합형
  // SUP
- Sthresh:{engage:.9,peel:.7,poke:.1,scale:.2,frontline:.4,range:.1,early:.2,late:.1,sideline:-.1}, // 후크 이니시 + 랜턴 보호를 동시에 가진 대표적 하이브리드
- Slulu:{engage:0,peel:1.3,poke:.1,scale:.3,frontline:-.1,range:.2,early:.1,late:.1,sideline:-.2}, // 이니시 수단 거의 없는 순수 보호형
- Spyke:{engage:.9,peel:.1,poke:0,scale:.3,frontline:0,range:-.1,early:.5,late:0,sideline:.2}, // 기습 처형형 — 기존 poke 태그 부정확, 실제론 로밍형 픽 이니시
- Syuumi:{engage:0,peel:1.2,poke:.2,scale:.6,frontline:-.5,range:.3,early:-.2,late:.3,sideline:-.5}, // 아군에 부착 — 프론트라인·사이드 운영 사실상 0
+ Sthresh:{engage:.9,peel:.7,poke:.1,scale:.2,frontline:.4,range:.1,early:.2,late:.1,sideline:-.1,pick:.9}, // 후크가 곧 교전 전 단일 대상 고립 — 이니시·보호·픽을 동시에 가진 대표적 하이브리드
+ Slulu:{engage:0,peel:1.3,poke:.1,scale:.3,frontline:-.1,range:.2,early:.1,late:.1,sideline:-.2,pick:0}, // 이니시·픽 수단 거의 없는 순수 보호형
+ Spyke:{engage:.9,peel:.1,poke:0,scale:.3,frontline:0,range:-.1,early:.5,late:0,sideline:.2,pick:1.2}, // 궁극이 체력 낮은 고립 대상을 초장거리에서 즉시 처형 — 이 게임에서 가장 순수한 픽 수단
+ Syuumi:{engage:0,peel:1.2,poke:.2,scale:.6,frontline:-.5,range:.3,early:-.2,late:.3,sideline:-.5,pick:0}, // 아군에 부착 — 프론트라인·사이드 운영·픽 사실상 0
+ Sblitzcrank:{engage:.5,peel:.2,poke:0,scale:.1,frontline:.3,range:.3,early:.3,late:-.1,sideline:-.3,pick:1.1}, // 후크로 대상을 아군 쪽으로 끌어와 고립시키는 교과서적 픽 서포터(F06 신설 추가)
 };
 
 // 태그가 특성에 기여하는 양(설계값). 챔피언마다 태그 2개.
@@ -83,7 +87,7 @@ const ROLE_BASE:Record<Role,Partial<CompProfile>>={
  SUP:{peel:.4,poke:.1,late:-.2},
 };
 
-const ZERO=():CompProfile=>({engage:0,peel:0,poke:0,scale:0,frontline:0,range:0,early:0,late:0,sideline:0});
+const ZERO=():CompProfile=>({engage:0,peel:0,poke:0,scale:0,frontline:0,range:0,early:0,late:0,sideline:0,pick:0});
 const clamp=(v:number,a:number,b:number)=>Math.min(b,Math.max(a,v));
 const sum=(ns:number[])=>ns.reduce((x,y)=>x+y,0);
 
@@ -118,6 +122,7 @@ function aggregateRaw(picks:string[]){
   early:sum(T.map(p=>p.early))/5,
   late:sum(T.map(p=>p.late))/5,
   sideline:sum(T.map(p=>Math.max(0,p.sideline))),
+  pick:sum(T.map(p=>Math.max(0,p.pick))),
   // 피해 유형 다양성: AD·AP 위협이 각각 2개 이상이면 대응 난도가 올라간다(혼합은 양쪽에 계수).
   dmgMix:(()=>{const t=picks.map(id=>champById(id).type);
    return t.filter(x=>x!=='AP').length>=2&&t.filter(x=>x!=='AD').length>=2?1:0;})(),
@@ -142,12 +147,19 @@ export function draftEffects(picksA:string[],picksB:string[]):DraftEffects{
  // §4.3 상대 매치업: 포크는 상대 진입이 약할 때만, 다이브는 상대 보호가 약할 때만 유효.
  const pokeEdge=a.poke*(1-Math.min(1,b.engage/2.5))-b.poke*(1-Math.min(1,a.engage/2.5));
  const diveEdge=a.engage*(1-Math.min(1,b.peel/2.5))-b.engage*(1-Math.min(1,a.peel/2.5));
+ // §4.3b(F06 신설): 픽/매복 — 본진 교전을 걸기 전에 장거리 구속으로 한 명을 끊는다. 상대 보호가
+ // 약할 때만 유효하다는 점은 다이브와 같지만, "팀 전체를 몰아넣지 않고 단일 대상만 고립"시킨다는
+ // 점에서 engage(강제 교전)와 다른 별개 채널이다. "강제 진입이 항상 포킹을 이긴다" 식 전역 보너스가
+ // 아니라 이 조건(상대 보호 약함)이 실제로 충족될 때만 커진다.
+ const pickEdge=a.pick*(1-Math.min(1,b.peel/2.5))-b.pick*(1-Math.min(1,a.peel/2.5));
 
  // 스케일 스택은 프로필의 early(−)/late(+)로 자연히 라인 취약·후반 강함이 된다.
  // §4.5(F05 신설): 사이드 운영 — 포킹·이니시 조합이 아니어도 스플릿으로 오브젝트 타이밍을 벌 수 있다.
  // 라인/한타에는 넣지 않는다(사이드에 있다는 것 자체가 그 교전엔 안 낀다는 뜻 — 이중 반영 금지).
  const sideEdge=Math.tanh((a.sideline-b.sideline)/3);
- const lane =clamp(0.55*pokeEdge+0.70*(a.range-b.range)+1.10*(a.early-b.early),-3,3);
+ // 픽은 라인전~로밍 단계(사건 0~2)에서 주로 발생하는 교전 전 이득이라 lane 채널에 더한다(한타·오브에는
+ // 더하지 않음 — 이미 끊긴 인원은 뒤따르는 오브젝트/한타의 인원차로 자연히 반영되므로 이중 반영 금지).
+ const lane =clamp(0.55*pokeEdge+0.70*(a.range-b.range)+1.10*(a.early-b.early)+0.60*pickEdge,-3,3);
  const obj  =clamp(0.70*completion+0.35*pokeEdge+0.40*synergy+0.45*sideEdge,-3,3);
  const fight =clamp(1.00*completion+0.85*synergy+0.50*diveEdge+1.30*(a.late-b.late),-3,3);
  return {lane,obj,fight};
@@ -155,17 +167,21 @@ export function draftEffects(picksA:string[],picksB:string[]):DraftEffects{
 
 
 // 감독에게 공개되는 조합 계획. 실측 승률이 아닌 현재 챔피언 태그 기반 게임 규칙.
-export type CompStyle='poke'|'engage'|'protect'|'scale';
-export const STYLE_LABEL:Record<CompStyle,string>={poke:'포킹·공성',engage:'돌진·강제 교전',protect:'보호·받아치기',scale:'후반 밸류'};
+export type CompStyle='poke'|'engage'|'protect'|'scale'|'pick';
+export const STYLE_LABEL:Record<CompStyle,string>={poke:'포킹·공성',engage:'돌진·강제 교전',protect:'보호·받아치기',scale:'후반 밸류',pick:'픽·매복'};
 export function compositionPlan(picks:string[]){
  const ps=picks.map(champProfile), a=aggregate(picks);
- const scores:Record<CompStyle,number>={poke:a.poke,engage:a.engage,protect:a.peel,scale:sum(ps.map(p=>p.scale))};
+ // F06: pick을 5번째 축으로 추가 — "강제 진입은 항상 포킹을 이긴다" 식 고정 서열이 아니라 각자의
+ // 팀 총량을 그대로 겨룬다(다른 스타일과 동일한 방식). 단일 라벨로 뭉개지 않도록 scores 전체를 함께 반환한다
+ // (UI가 이미 이 scores 객체를 전부 보여준다 — app/composition-panel.tsx).
+ const scores:Record<CompStyle,number>={poke:a.poke,engage:a.engage,protect:a.peel,scale:sum(ps.map(p=>p.scale)),pick:a.pick};
  const style=(Object.keys(scores) as CompStyle[]).sort((x,y)=>scores[y]-scores[x])[0];
  const plans:Record<CompStyle,{goal:string,risk:string}>={
   poke:{goal:'오브젝트에 먼저 자리 잡고 원거리 견제로 진입을 어렵게 만든 뒤 공성',risk:'진입을 허용하면 짧은 거리 교전에 취약'},
   engage:{goal:'정글·앞라인이 거리를 좁혀 상대 딜러에게 강제 교전',risk:'보호와 역이니시에 진입이 막히면 후속 공격이 끊김'},
   protect:{goal:'앞라인으로 진입을 받아내고 원딜을 보호하며 반격',risk:'상대가 들어오지 않고 멀리서 견제하면 주도권을 잃음'},
   scale:{goal:'초반 손실을 줄이고 성장한 딜러 중심으로 후반 교전',risk:'성장 전에 오브젝트와 구조물을 연속으로 내주면 위험'},
+  pick:{goal:'본진 교전 전에 장거리 구속으로 상대를 한 명씩 고립시켜 인원차를 만든 뒤 싸움',risk:'상대 보호가 단단하면 구속이 씻기고 되레 이쪽이 끊길 수 있음'},
  };
  return {style,label:STYLE_LABEL[style],...plans[style],scores,complete:picks.length===5};
 }

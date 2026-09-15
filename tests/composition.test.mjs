@@ -119,4 +119,21 @@ const M=(pa,pb)=>({id:'c-1',a:'nva',b:'crn',bestOf:3,scoreA:0,scoreB:0,sets:[],l
  assert.ok(sideHeavy.obj>sideHeavy.fight,`사이드 운영 축이 obj 채널에서 한타 열세를 일부 상쇄해야 함: obj=${sideHeavy.obj} fight=${sideHeavy.fight}`);
 }
 
+// --- 7. F06: 픽/매복 — 전역 가위바위보 보너스가 아니라 상대 보호가 약할 때만 유효해야 한다 ---
+{
+ // 파이크(핵심 픽 원형)를 포함한 팀. 상대 보호가 약한 조합 vs 강한 조합을 비교 — 같은 픽 조합인데
+ // 상대의 보호(peel) 여부에 따라 이득의 크기가 달라져야 한다("유리 조건이 사라지면 이점도 줄어든다").
+ const pickTeam=['Spyke','Jleesin','Mahri','Ajinx','Tfiora'];
+ const weakPeelOpp=['Mzed','Jgraves','Avayne','Jvi','Tfiora']; // 보호 수단 거의 없음(peel 합 최소)
+ const strongPeelOpp=['Slulu','Jivern','Avayne','Jvi','Tfiora']; // 순수 보호형 2명 포함(peel 합 최대)
+ const vsWeak=draftEffects(pickTeam,weakPeelOpp), vsStrong=draftEffects(pickTeam,strongPeelOpp);
+ assert.ok(vsWeak.lane>vsStrong.lane,
+  `같은 픽 조합이라도 상대 보호가 강하면 이점이 줄어야 함: 보호 약함 lane=${vsWeak.lane} vs 보호 강함 lane=${vsStrong.lane}`);
+
+ // compositionPlan이 픽을 5번째 독립 스타일로 인식한다(엔진 항목 하나 추가가 아니라 UI에도 반영).
+ const purePick=compositionPlan(['Spyke','Sblitzcrank','Mzed','Akalista','Acaitlyn']);
+ assert.equal(purePick.style,'pick',`픽 특화 조합이 pick 스타일로 인식돼야 함: ${purePick.style} (scores=${JSON.stringify(purePick.scores)})`);
+ assert.ok('pick' in purePick.scores,'scores에 pick 축이 노출됨(UI가 그대로 표시)');
+}
+
 console.log('PASS composition: profile derivation, pure antisymmetry, matchup direction, engine segment sensitivity, single-path determinism');

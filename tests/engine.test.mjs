@@ -16,7 +16,7 @@ function next(g){if(g.phase==='PLAN'){g=applyCommand(g,{type:'training',payload:
   sets++;return applyCommand(g,{type:'play'});}
  if(g.phase==='TACTICAL'){const m=g.match,preview=m.tacticalState.previewEvents;assert.equal(preview.length,3,'라인전 3사건 미리보기');
   const setsBefore=m.sets.length;
-  const choices=['prepare','trade','regroup'];const choice=choices[setsBefore%3];
+  const choices=['prepare','trade','regroup','protect','allin'];const choice=choices[setsBefore%5];
   const n=applyCommand(g,{type:'tacticalChoice',payload:{choice}});
   assert.equal(n.phase,'RECAP','작전 지시 후 리캡으로 전환');
   assert.equal(n.match.sets.length,setsBefore+1,'세트가 커밋됨');

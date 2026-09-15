@@ -93,9 +93,11 @@ function DraftSummary({g,match,busy,act,onPlayer}:DraftProps){
 function TacticalPrompt({g,match,busy,act}:{g:Game,match:Match,busy:boolean,act:(c:Command)=>Promise<Game|null>}){
  const ts=match.tacticalState;if(!ts)return null;
  const mineIsA=match.a===g.teamId;
- const options:{id:'prepare'|'trade'|'regroup',label:string,desc:string}[]=[
+ const options:{id:'prepare'|'trade'|'regroup'|'protect'|'allin',label:string,desc:string}[]=[
   {id:'prepare',label:'싸움 준비',desc:'시야와 대형을 갖추고 다음 한타에 대비합니다. 교전이 열리면 유리해지지만, 오브젝트 확보 자체를 밀어주지는 않습니다.'},
   {id:'trade',label:'반대편 이득',desc:'정면 교전 대신 반대편 오브젝트·라인 압박에 집중합니다. 오브젝트 확보에 유리해지지만, 그 사이 한타 준비는 덜 됩니다.'},
+  {id:'protect',label:'딜러 보호',desc:'서포터가 딜러 보호에 집중합니다. 한타에서 지더라도 딜러 생존율이 뚜렷이 오르지만, 승부 자체를 유리하게 만들지는 않습니다.'},
+  {id:'allin',label:'위험 감수 진입',desc:'불리해 보여도 교전을 피하지 않고 거는 쪽을 택합니다. 무교전으로 넘어갈 상황이 줄고 소폭의 승부 우위가 붙지만, 불리한 교전도 그대로 열립니다.'},
   {id:'regroup',label:'정비',desc:'무리하지 않고 현재 균형을 유지합니다. 어느 쪽에도 유불리를 더하지 않는 안전한 선택입니다.'},
  ];
  return <div className="draft-board tactical-board">

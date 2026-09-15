@@ -3,7 +3,7 @@ import {CHAMPIONS, TAG_LABEL, champImageUrl, type Champion, type ChampTag, type 
 import {TEAM_META, FOREIGN_META, TEAM_LOGO, LCK_ROSTER, INTL_ROSTER} from './rosters.ts';
 import {draftEffects,compositionPlan,draftFitScore} from './balance/composition.ts';
 import {narrateEvent, newNarrMemory, type Beat, type Tier} from './simulation/narration.ts';
-import {newMatchState, resolveGank, resolveBotLane, resolveObjective, resolveTeamfight, resolveSiege, type CombatEvent, type Side} from './simulation/combat.ts';
+import {newMatchState, resolveGank, resolveBotLane, resolveObjective, resolveTeamfight, resolveSiege, type CombatEvent, type Side, type DirectorBonus} from './simulation/combat.ts';
 export {CHAMPIONS, TAG_LABEL, champImageUrl, TEAM_META, FOREIGN_META, TEAM_LOGO};
 export type {Champion, ChampTag, ChampType};
 export const ROLES = ['TOP','JGL','MID','ADC','SUP'] as const;
@@ -37,7 +37,7 @@ export type DraftState={blue:string,red:string,step:number,bans:{side:'B'|'R',ch
 export type GameEvent={index:number,phase:string,title:string,winner:string,edge?:string,prob:number,advantage:number,powerA:number,powerB:number,goldA:number,goldB:number,detail:string,leadA?:number,resPowA?:number,compA?:number,beats?:Beat[],tier?:Tier,kills?:{a:number,b:number},combat?:CombatEvent};
 export type CapDiag={reason:'TIME'|'EVENT',clock:number,events:number,structDealt:[number,number],baseTurrets:[number,number],inhibsOpen:[number,number],recentSiegeFails:string[],tiebreakStage:'struct'|'pressure'|'advantage'|'coin'};
 export type SetResult={winner:string,endReason?:'NEXUS'|'CAP_TIME'|'CAP_EVENT',capDiag?:CapDiag,events:GameEvent[],draft:Draft,recap:string[],pog:string,pogReason?:string,powersA:number[],powersB:number[],lineupA:string[],lineupB:string[],leadA?:number[],draftFx?:{lane:number,obj:number,fight:number}};
-export type TacticalChoice='prepare'|'trade'|'regroup';
+export type TacticalChoice='prepare'|'trade'|'regroup'|'protect'|'allin';
 export type TacticalState={previewEvents:GameEvent[]};
 export type Match={id:string,a:string,b:string,bestOf:number,scoreA:number,scoreB:number,sets:SetResult[],winner?:string,draft?:Draft,draftState?:DraftState,tacticalState?:TacticalState,label:string};
 export type RecordMatch={id:string,a:string,b:string,sa:number,sb:number,winner:string,label:string,season:number};
@@ -322,6 +322,20 @@ export function simulateSet(g:Game,m:Match,directive?:TacticalChoice):SetResult{
   if(!forThisPhase)return 0;
   return nUserIsA?TACTICAL_BONUS:-TACTICAL_BONUS;
  };
+ // F12: 딜러 보호/위험 감수 진입은 한타 내부(resolveTeamfight)의 protect/engage/favor에만 반영되고
+ // tacticalAccess(위 phase별 확률)는 건드리지 않는다 — prepare/trade가 주는 일반 확률 우위를 이 둘은 받지 못한다(그게 대가).
+ // 상수는 통제 실험(controlled base, 1500시드)으로 눈으로 보정했다: allin(engage+favor)의 세트 승률 효과가
+ // 기존 prepare(TACTICAL_BONUS=1.2, phase===4 전체에 적용)와 비슷한 크기(+3.9pp vs +4.1pp)가 되도록 낮췄다
+ // — 처음 잡은 값(0.10/0.05)은 무교전 비율을 9%→0.2%로 거의 없애고 승률을 +11pp 흔들어 "지배적 레버가
+ // 되지 않게 한다"는 F04 원칙을 어겼다. protect는 승률이 아니라 딜러 생존률(+6.9pp, 승률은 거의 불변)에만
+ // 영향을 줘 다른 축이라 같은 잣대로 비교하지 않는다.
+ const DIRECTOR_PROTECT=0.08, DIRECTOR_ENGAGE=0.02, DIRECTOR_FAVOR=0.02;
+ const directorBonus=():DirectorBonus|undefined=>{
+  if(!directive||nUserIsA===null)return undefined;
+  if(directive==='protect')return {protect:nUserIsA?DIRECTOR_PROTECT:-DIRECTOR_PROTECT,favor:0,engage:0};
+  if(directive==='allin')return {protect:0,favor:nUserIsA?DIRECTOR_FAVOR:-DIRECTOR_FAVOR,engage:DIRECTOR_ENGAGE};
+  return undefined;
+ };
  const CLOCK_CAP=3600, EVENT_CAP=60;      // 무한 실행 방지 상한(경기 시계 초 / 사건 수). 도달은 정상 넥서스 승리와 구분해 기록.
  let ei=0;                               // GameEvent.index (스켈레톤 0..8, 이후 공성·연장 사건이 이어 붙는다)
  let endReason:'NEXUS'|'CAP_TIME'|'CAP_EVENT'='CAP_EVENT';
@@ -384,7 +398,7 @@ export function simulateSet(g:Game,m:Match,directive?:TacticalChoice):SetResult{
   }else{
    if(i===5)cs.clock=1080;
    cs.clock+=28; // decision and regrouping window, in actual game seconds
-   const node=battlefield(i);cb=withMovement(()=>resolveTeamfight(cs,i,r.edgeA,r.margin,cs.clock,crng,node),node);
+   const node=battlefield(i);cb=withMovement(()=>resolveTeamfight(cs,i,r.edgeA,r.margin,cs.clock,crng,node,directorBonus()),node);
    for(let s=0;s<5;s++)lead[s]+=cb.resource[s];
    const fw=cb.fight!.winner;
    waIn=fw==='A'?true:fw==='B'?false:r.edgeA;
@@ -396,7 +410,7 @@ export function simulateSet(g:Game,m:Match,directive?:TacticalChoice):SetResult{
  while(!nexusDown&&cs.clock<CLOCK_CAP&&ei<EVENT_CAP-1){
   const r=rollFight(4,tacticalAccess(4));
   cs.clock+=28;
-  const node=battlefield(9),cb=withMovement(()=>resolveTeamfight(cs,9,r.edgeA,r.margin,cs.clock,crng,node),node);
+  const node=battlefield(9),cb=withMovement(()=>resolveTeamfight(cs,9,r.edgeA,r.margin,cs.clock,crng,node,directorBonus()),node);
   for(let s=0;s<5;s++)lead[s]+=cb.resource[s];
   const fw=cb.fight!.winner;
   finalize(ei++,9,cb,r,fw==='A'?true:fw==='B'?false:r.edgeA);
@@ -541,7 +555,7 @@ export function applyCommand(source:Game,cmd:Command):Game{const g=upgradeGame(s
  // 감독 지시를 기다린다. 기존 일괄 계산(simulateSet(g,m))은 directive 생략 시 완전히 동일하게 동작한다
  // (autoMatch·회귀 테스트는 이 경로를 그대로 쓴다 — 호환 경로 보존).
  case 'play':{requirePhase(g,['DRAFT']);const m=g.match!;if(!m.draftState?.complete&&!m.draft)throw Error('밴픽을 먼저 완료해 주세요.');const preview=simulateSet(g,m);m.tacticalState={previewEvents:preview.events.slice(0,3)};g.phase='TACTICAL';break;}
- case 'tacticalChoice':{requirePhase(g,['TACTICAL']);const m=g.match!;const ts=m.tacticalState;if(!ts)throw Error('작전 지시를 진행할 세트가 없습니다.');const choice=String(p.choice);if(!['prepare','trade','regroup'].includes(choice))throw Error('작전 지시를 확인해 주세요.');
+ case 'tacticalChoice':{requirePhase(g,['TACTICAL']);const m=g.match!;const ts=m.tacticalState;if(!ts)throw Error('작전 지시를 진행할 세트가 없습니다.');const choice=String(p.choice);if(!['prepare','trade','regroup','protect','allin'].includes(choice))throw Error('작전 지시를 확인해 주세요.');
   const r=simulateSet(g,m,choice as TacticalChoice);
   if(JSON.stringify(r.events.slice(0,3))!==JSON.stringify(ts.previewEvents))throw Error('라인전 결과가 미리보기와 달라 진행할 수 없습니다. 다시 시도해 주세요.'); // 결정성 안전장치 — 정상 동작에서는 항상 통과한다
   m.sets.push(r);r.winner===m.a?m.scoreA++:m.scoreB++;m.draft=undefined;m.draftState=undefined;m.tacticalState=undefined;g.phase='RECAP';break;}

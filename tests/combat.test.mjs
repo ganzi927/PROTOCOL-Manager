@@ -546,6 +546,51 @@ const CRNG=()=>random(hash('obj-test'));
  }
 }
 
+// --- 9b. F12: 감독 지시(딜러 보호/위험 감수 진입)의 resolveTeamfight 반영 ---
+{
+ const seedRng=tag=>random(hash(tag));
+ const N=600;
+ const runMany=directorBonus=>{
+  let aWin=0,bWin=0,noEngage=0,tfN=0,bWinLossN=0,adcSurvWhenLost=0;
+  for(let s=0;s<N;s++){
+   const st=mkState();
+   const ce=resolveTeamfight(st,5,false,0.6,1080,seedRng('f12b-'+s),undefined,directorBonus); // edgeA=false·margin 0.6 → B가 우세한 쪽
+   tfN++;
+   if(ce.fight.result==='NO_ENGAGE'){noEngage++;continue;}
+   if(ce.fight.winner==='A')aWin++; else if(ce.fight.winner==='B'){
+    bWin++; bWinLossN++;
+    const adc=ce.fight.contrib.find(c=>c.ref.side==='A'&&c.ref.slot===3);
+    if(adc&&adc.survived)adcSurvWhenLost++;
+   }
+  }
+  return {aWin,bWin,noEngage,tfN,bWinLossN,adcSurvWhenLost};
+ };
+ const base=runMany(undefined);
+
+ // (1) directorBonus 없음(undefined)은 기존 호출과 완전히 동일한 경로 — 결정성 재확인(회귀 없음 보장).
+ {
+  const a=resolveTeamfight(mkState(),5,true,0.3,1080,seedRng('f12-det'));
+  const b=resolveTeamfight(mkState(),5,true,0.3,1080,seedRng('f12-det'),undefined,undefined);
+  assert.equal(JSON.stringify(a),JSON.stringify(b),'directorBonus 없음/undefined 경로 결과 동일');
+ }
+ // (2) 딜러 보호(protect): mkState의 기본 픽(실존하지 않는 id)은 조합 프로필이 0이라 protectA/B 기저값이
+ //     0이다 — directorBonus.protect만큼 순수하게 오른다. A가 지는 한타에서 A ADC 생존율이 뚜렷이 오른다.
+ {
+  const withProtect=runMany({protect:0.08,favor:0,engage:0});
+  const baseRate=base.adcSurvWhenLost/base.bWinLossN, protRate=withProtect.adcSurvWhenLost/withProtect.bWinLossN;
+  assert.ok(protRate>baseRate*1.1,`딜러 보호 지시 → A ADC 생존율(진 한타 한정) 상승: ${(baseRate*100).toFixed(1)}% → ${(protRate*100).toFixed(1)}%`);
+  // 승패 자체는 흔들지 않는다(그게 이 지시의 대가) — 승수 비율이 base와 크게 다르지 않아야 한다.
+  assert.ok(Math.abs(withProtect.aWin-base.aWin)<=Math.round(N*0.06),'딜러 보호는 승패 분포를 크게 바꾸지 않는다');
+ }
+ // (3) 위험 감수 진입(engage/favor): 무교전이 줄고, A쪽으로 승수가 유의미하게 이동한다(부호·존재 확인 —
+ //     실제 상수 크기는 game.ts의 DIRECTOR_* 튜닝값을 쓰는 통계적 검증을 별도 스크래치 스크립트로 이미 확인함).
+ {
+  const withAllin=runMany({protect:0,favor:0.4,engage:0.5}); // 메커니즘 존재를 크게 드러내려 과장된 값 사용(실제 튜닝값 아님)
+  assert.ok(withAllin.noEngage<base.noEngage,`위험 감수 진입 → 무교전 감소: ${base.noEngage}/${N} → ${withAllin.noEngage}/${N}`);
+  assert.ok(withAllin.aWin>base.aWin,`위험 감수 진입(A측 편향) → A 승수 증가: ${base.aWin} → ${withAllin.aWin}`);
+ }
+}
+
 // --- 10. 단위 5: 공성(resolveSiege) — 구조물 진행 · 종료 · 이중 보상 방지 ---
 {
  const seedRng=tag=>random(hash(tag));

@@ -445,8 +445,12 @@ export function resolveObjective(
 // 무승부·상호 후퇴·무교전·양측 전멸은 승리로 세지 않는다(winner=null → pressure·advantage 이동 없음).
 const TF_KILL_G=280, TF_ASSIST_G=125, TF_DEATH_G=200;
 
+// F12: 감독 지시(딜러 보호/위험 감수 진입)의 한타 반영분. 없으면(undefined) 기존 결과와 100% 동일 —
+// protect는 A 기준 부호(양수=A 보호 강화), favor도 A 기준 부호, engage는 크기만(교전 성사 확률에 가산, 양쪽 공용).
+export type DirectorBonus={protect:number,favor:number,engage:number};
 export function resolveTeamfight(
  st:MatchState, seq:number, edgeA:boolean, margin:number, clock:number, crng:()=>number, targetNode=seq===5?'dragon':seq===6?'baron':'mid',
+ directorBonus?:DirectorBonus,
 ):CombatEvent{
  reviveByClock(st,clock);
  const favSide:Side=edgeA?'A':'B', othSide:Side=edgeA?'B':'A';
@@ -465,6 +469,13 @@ export function resolveTeamfight(
   else if(!aB0.includes(sl)) notJoined.push({ref:{side:'B',slot:sl},reason:'이동 중(도착 전)'});
  }
  const plan=battlePlan(aA0.map(sl=>st.A[sl].champ),aB0.map(sl=>st.B[sl].champ),clock);
+ // F12: 딜러 보호 지시는 지시한 팀 쪽 protect만 올린다(다른 축은 손대지 않음 — 그게 이 지시의 대가:
+ // prepare/trade가 주는 일반 전투 확률 우위를 protect는 받지 못한다).
+ if(directorBonus?.protect){
+  if(directorBonus.protect>0) plan.protectA=clampN(plan.protectA+directorBonus.protect,0,0.3);
+  else plan.protectB=clampN(plan.protectB-directorBonus.protect,0,0.3);
+ }
+ const dEngage=directorBonus?.engage??0, dFavor=directorBonus?.favor??0;
  const nFav=(favSide==='A'?aA0:aB0).length, nOth=(favSide==='A'?aB0:aA0).length;
 
  const res=[0,0,0,0,0, 0,0,0,0,0];
@@ -486,6 +497,8 @@ export function resolveTeamfight(
  };
 
  const ev:string[]=[`한타 — ${favSide} ${nFav}인 vs ${othSide} ${nOth}인`,`A ${plan.a.label} / B ${plan.b.label}`];
+ if(directorBonus?.protect) ev.push(`${directorBonus.protect>0?'A':'B'} 감독 지시: 딜러 보호 강화`);
+ if(directorBonus?.engage) ev.push(`감독 지시: 위험을 감수하고 교전을 강제`);
  let result:TFResult, winner:Side|null;
 
  if(nFav===0&&nOth===0){ result='NO_SHOW'; winner=null; ev.push('양 팀 모두 인원이 없어 교전 불성립'); }
@@ -493,11 +506,13 @@ export function resolveTeamfight(
  else if(nOth===0){ result='ONE_SIDED'; winner=favSide; ev.push(`${othSide} 전원 이탈 — ${favSide}가 무혈 장악`); }
  else {
   const numAdvFav=(nFav-nOth)*0.16;                       // 실제 사망이 만든 인원차 — p에 없던 새 채널
-  const engageP=clamp01(0.88+margin*0.05+Math.abs(plan.entry)-Math.abs(plan.preparation)*.6);               // 대부분 교전 성립. 무교전은 팽팽한 경기의 드문 예외
+  // F12: 위험 감수 진입 지시는 교전 성사 확률을 밀어 올린다(dEngage, 크기만·양쪽 공용) — 안 열렸을 무교전을
+  // 강제로 열게 만드는 것 자체가 이 지시의 대가다(margin이 불리해도 fight는 열리고, 지면 그대로 진다).
+  const engageP=clamp01(0.88+margin*0.05+Math.abs(plan.entry)-Math.abs(plan.preparation)*.6+dEngage);               // 대부분 교전 성립. 무교전은 팽팽한 경기의 드문 예외
   if(crng()>=engageP){ result='NO_ENGAGE'; winner=null; ev.push('양 팀 대치만 하다 물러남 — 무교전'); }
   else {
-   // 승패 = margin(이미 p에 반영된 전력·자원·조합의 요약) + 실제 인원차. 작은 margin도 pressure 경쟁에서 누적된다.
-   const favWins=crng()<clamp01(0.5+margin*0.75+numAdvFav+(edgeA?1:-1)*(plan.preparation+plan.entry+plan.growth));
+   // 승패 = margin(이미 p에 반영된 전력·자원·조합의 요약) + 실제 인원차 + (있다면) 위험 감수 진입의 소폭 편향.
+   const favWins=crng()<clamp01(0.5+margin*0.75+numAdvFav+(edgeA?1:-1)*(plan.preparation+plan.entry+plan.growth)+(favSide==='A'?dFavor:-dFavor));
    const decisive=margin>0.16||Math.abs(nFav-nOth)>=2;
    const wSide:Side=favWins?favSide:othSide, lSide:Side=favWins?othSide:favSide;
    const trade=margin<0.05 && Math.abs(nFav-nOth)<2 && crng()<0.25; // 킬 교환·무승부는 정말 팽팽할 때만

@@ -278,7 +278,7 @@
 
 **다음 작업 ID / 바로 실행할 첫 행동:** 이번 세션은 F01~F10(각각 첫 슬라이스 또는 완전 검증)까지 진행했다. 다음은 F10 나머지(재생성 데이터화·시야 구역) 계속, F11(공성·수비·넥서스), 또는 F15(밸런스 검증 도구 — F05~F10 여섯 항목이 전부 "대규모 시드 스윕 미실시"를 남겼다, 이제는 이 도구 자체가 가장 시급할 수 있다).
 
-(엔진 배경 회귀 확인 후기: F10 커밋 직후 백그라운드로 돌린 `engine.test.mjs`는 PASS 확인(3커리어/1068세트). `combat.test.mjs`는 이 컴퓨터의 CPU 경합으로 F11 작업 도중까지도 계속 실행 중이었다 — 격리 스크립트로 이미 검증한 로직과 F11 자체 실측 스윕(5000+시드, 아래)이 간접 확인을 대신했다. 결과는 확인되는 대로 이 문서 하단에 덧붙인다.)
+(엔진 배경 회귀 확인 후기: F10 커밋 직후 백그라운드로 돌린 `engine.test.mjs`는 PASS 확인(3커리어/1068세트). `combat.test.mjs`는 이 컴퓨터의 CPU 경합으로 F11 작업 도중까지도 계속 실행 중이었다 — 격리 스크립트로 이미 검증한 로직과 F11 자체 실측 스윕(5000+시드, 아래)이 간접 확인을 대신했다. 결과 확인됨(F12 착수 직전, 약 30분 백그라운드 실행 후): **PASS**, exit 0 — determinism·kill/survival·D022 이동↔전투 단일 계약(필수 불변 조건 300건)·unit-5 공성(window/ADC-contrib/순서/이중보상없음/넥서스전용종료/cap-vs-nexus)·unit-6 POG 전부 정상. 느렸던 건 이전에 기록한 대로 이 컴퓨터의 무관한 다른 프로세스와의 CPU 경합 때문이었다(코드 결함 아님, 격리 스크립트 12ms 결과와 일치).)
 
 ## F11 — 공성·넥서스 마무리: 실측 검증, 코드 변경 없음 (2026-09-15)
 
@@ -346,3 +346,34 @@
 **결정:** 이번 세션엔 F12 코드를 작성하지 않는다. "깊은 구현" 경로(`resolveTeamfight`에 선택적 파라미터로 director bonus를 추가 — 없으면 완전 중립, 기존 `directive` 없는 모든 호출과 100% 동일 결과를 보장하는 F09/F10과 같은 "안전한 가산" 패턴)를 다음 세션의 설계로 남긴다. `prepare`/`trade`/`regroup` 기존 3종은 재구현하지 않는다(그대로 유지, `tests/engine.test.mjs`의 순환 검증 대상).
 
 **다음 작업 ID / 바로 실행할 첫 행동:** F12 계속 — `combat.ts`의 `resolveTeamfight(st,seq,edgeA,margin,clock,crng,node,directorBonus?)`처럼 선택적 파라미터를 추가해 `protectA/B`·`engageP`·`favWins`에 반영하고, `game.ts`에서 `'protect'`/`'allin'` 두 directive를 `TacticalChoice`에 추가해 전달한다. 반드시 (a) `directorBonus` 없을 때 기존 결과 100% 동일(회귀 없음)을 먼저 스크래치 스크립트로 증명, (b) `combat.test.mjs`에 mkState 기반 직접 구성 시나리오 추가, (c) `engine.test.mjs`의 TACTICAL 순환 테스트에 새 두 choice 포함, 순서로 진행. 착수 전 `combat.test.mjs`가 조용한 상태인지(다른 백그라운드 실행과 안 겹치는지) 먼저 확인할 것.
+
+## F12 — 감독의 경기 중 지시: 딜러 보호·위험 감수 진입 구현 완료 (2026-09-15)
+
+**목표:** F04의 TACTICAL 결정 지점에서 운영 우선순위를 바꿀 수 있게 한다. ③딜러 보호 ④위험 감수 진입 두 지시를 추가. 각 지시는 장점·포기하는 것을 가져야 하고 "공격적 지시: 승률 +10%" 식으로 끝내지 않는다.
+
+**구현(위 절에서 설계한 그대로, `combat.test.mjs`가 조용해진 뒤 착수):**
+- `lib/simulation/combat.ts`: `resolveTeamfight`에 선택적 6번째 파라미터 `directorBonus?:DirectorBonus`(`{protect,favor,engage}`, A기준 부호) 추가. `undefined`면 완전 무영향(기존 모든 호출 100% 동일). `protect`는 `plan.protectA/B`(딜러 보호 확률 채널)에만 가산, `engage`는 `engageP`(무교전 여부)에, `favor`는 `favWins` 판정에 가산. 각 지시가 실제로 적용됐을 때 `evidence[]`에 근거 문장 추가(F09/F10과 같은 원칙 — "공성이 실제 손해·이득을 설명한다"를 한타에도 적용).
+- `lib/game.ts`: `TacticalChoice`에 `'protect'|'allin'` 추가. `directorBonus()` 헬퍼 신설(`tacticalAccess`와 같은 위치, 같은 nUserIsA 부호 규칙) — `protect`는 `DIRECTOR_PROTECT=0.08`만, `allin`은 `DIRECTOR_ENGAGE=0.02`+`DIRECTOR_FAVOR=0.02`만 채운다(교차 없음 — 각 지시가 정확히 하나의 메커니즘만 건드리게). 두 `resolveTeamfight` 호출부(스켈레톤 i≥5, 연장전)에 `directorBonus()` 전달. `case 'tacticalChoice'`의 합법 목록에 두 값 추가.
+- `app/manager.tsx`: `TacticalPrompt`의 `options`에 '딜러 보호'/'위험 감수 진입' 두 버튼 추가(장점·대가를 설명하는 문구 포함). CSS(`grid-template-columns:repeat(3,1fr)`)는 5개 항목이면 자연스럽게 2번째 줄로 넘어가므로 별도 수정 안 함.
+- `tests/combat.test.mjs`: 새 섹션 9b — mkState(조합 프로필이 0인 플레이스홀더 픽이라 protectA/B 기저값이 0 — 가산분만 순수하게 측정 가능) + 통제 margin/edgeA로 (1) directorBonus 없음/undefined 결정성 동일 재확인 (2) 딜러 보호 → A가 진 한타에서 ADC 생존율 상승(31%→39%대, N=600) 하지만 승패 분포는 거의 안 바뀜(대가) (3) 위험 감수 진입(과장된 값으로 메커니즘 자체를 크게 드러냄) → 무교전 감소 + A 승수 증가.
+- `tests/engine.test.mjs`: TACTICAL 순환 배열을 `['prepare','trade','regroup']`(3종)에서 `['prepare','trade','regroup','protect','allin']`(5종)로 확장.
+
+**상수 튜닝 과정(정직하게 기록):** 처음 잡은 `DIRECTOR_ENGAGE=0.10,DIRECTOR_FAVOR=0.05`는 통제 실험(1500시드)에서 무교전 비율을 9.17%→0.19%(사실상 소멸)로 만들고 세트 승률을 +11.26%p 흔들었다 — F04가 적은 "지배적 레버가 되지 않도록"를 명백히 어겼다. 기존 `prepare`(TACTICAL_BONUS=1.2, phase===4 전체 적용)의 실측 효과가 +4.06%p였다는 걸 같은 하네스로 측정해 기준으로 삼고, `allin`이 그와 비슷한 크기(+3.86%p, 무교전 9.17%→7.53%)가 되도록 `0.02/0.02`로 낮췄다. `protect`는 승률이 아니라 생존율에만 작용하는 다른 축이라 같은 잣대로 비교하지 않았다(승률 영향 거의 0인 채로 생존율만 +6.9%p 오름을 확인).
+
+**변경 파일:** `lib/simulation/combat.ts`, `lib/game.ts`, `app/manager.tsx`, `tests/combat.test.mjs`, `tests/engine.test.mjs`, `docs/claude/DEVELOPMENT_ORDERS_PROGRESS.md`, `docs/claude/HANDOFF.md`.
+
+**사용자에게 달라진 경험:** TACTICAL 화면(오브젝트 준비 전 작전 지시)에 '딜러 보호'·'위험 감수 진입' 두 버튼이 새로 보인다. 딜러 보호를 고르면 이후 한타에서 서포터 보호 성공(딜러 생존) 빈도가 눈에 띄게 오르지만 승부 자체엔 거의 영향이 없다. 위험 감수 진입을 고르면 무교전으로 넘어갈 상황이 줄고(더 자주 붙는다) 붙었을 때 소폭의 승부 우위가 붙지만, 불리한 조건에서도 그대로 붙기 때문에 항상 유리하지만은 않다.
+
+**실제로 실행한 검증과 결과:**
+- 스크래치 스크립트로 먼저 검증(F09/F10 교훈 적용, 슬로우 스위트 전에): (1) directive 없는 `simulateSet` 2회 완전 동일(결정성 유지) (2) 5개 directive 전부 에러 없이 실행 (3) 통제 실험(controlled base, N=1500)으로 `prepare`(+4.06%p)·`trade`(-0.14%p, 오브젝트 사건이 2개뿐이라 노이즈 수준) 대비 `allin`(+3.86%p, 튜닝 후) 크기를 맞췄고 `protect`는 ADC 생존율만 +6.9%p 올림(승률 불변)을 직접 확인.
+- `combat.test.mjs`의 새 섹션 9b도 커밋 전 별도 스크래치 스크립트로 100% 동일 로직을 먼저 돌려 PASS 확인(F10 교훈 — 테스트 자체의 설계 버그를 슬로우 스위트 전에 잡는다).
+- `tsc --noEmit` 0 에러, `npm run build` 성공.
+- 8개 무관 스위트(`composition/ability/management/narration/replay/spatial/director/broadcast`) 전부 PASS(F12와 무관한 영역 회귀 없음 재확인).
+- `tests/engine.test.mjs`(TACTICAL 5종 순환 포함): **PASS** — 3커리어, 1103 결정적 세트(직전 F10 확인 때 1068 → TACTICAL 순환이 5종으로 늘어 세트 수도 늘었다).
+- `tests/combat.test.mjs`(신설 9b 포함): **PASS**, exit 0 — 9b 포함 전 구간(determinism·D022 단일 계약 300건·unit-5 공성·unit-6 POG 등) 이상 없음.
+
+**기준선 대비 변화:** `resolveTeamfight`에 새 선택적 파라미터 추가 — directive가 없거나 `regroup`/`prepare`/`trade`인 모든 기존 경로(자동 매치·회귀 테스트 전부)는 `directorBonus()`가 `undefined`를 반환해 100% 기존과 동일. `protect`/`allin`을 실제로 고를 때만 새 채널이 작동한다.
+
+**알려진 문제·미검증·외부 차단:** 없음(BLOCKED 아님). F12의 "반응 지연"·"변경 제한" 요구는 기존 TACTICAL 구조(세트당 한 번, 라인전 직후 한 번만 결정하고 이후 전부 적용)로 이미 자연히 만족된다(재전송·연타로 중첩 안 됨 — `tacticalChoice`가 phase를 RECAP으로 바로 넘김). 실제 브라우저에서 새 두 버튼이 정상 렌더링되는지는 이번엔 확인 안 함(도구 접근 제약, F02와 동일한 미확인 항목).
+
+**다음 작업 ID / 바로 실행할 첫 행동:** F13(경기의 앞뒤를 기억하는 해설) 또는 F14(다음 경기에 도움이 되는 리캡). 지시서 우선순위(P2: F12~F14, F12 완료)상 자연스러운 다음 단계.

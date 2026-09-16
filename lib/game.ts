@@ -54,12 +54,27 @@ export const SCOUT_CAP=15;
 // — 사용자 팀만 기록한다(planNotice와 같은 범위). 팀당 최근 TRAINING_LOG_CAP개만 보존.
 export type TrainingLogEntry={season:number,round:number,playerId:string,training:string,champ?:string,effect:string};
 export const TRAINING_LOG_CAP=60;
+// F26: 리플레이·공유·관전 기록. F04가 예고만 해두고 아무도 안 만든 simulationVersion을 여기서 처음
+// 실제로 쓴다 — 엔진(combat.ts/game.ts의 시뮬레이션 로직)이 눈에 띄게 바뀔 때마다 사람이 손으로 올린다
+// (자동 감지 아님, git 커밋과 무관한 "엔진 계약 버전"). 저장 스키마 버전(Game.version, upgradeGame이
+// 관리)과는 완전히 별개다 — 세이브 형태가 그대로여도 승패 로직이 바뀌면 이 값만 오른다.
+export const ENGINE_VERSION=1;
+export const RULE_VERSION='classic-v1'; // settings 화면의 "현재 게임 규칙" 문구와 짝 — 규칙 버전이 여러 개가 되면 그때 분기한다.
+// 리플레이 한 건 = 완결된 세트 하나(SetResult, 이미 events/draft/lineup을 전부 가짐) + 그걸 만든 시점의
+// 엔진·규칙 버전 + 식별용 메타(상대·시즌). "세이브 전체 대신"이라는 지시서 요구를 그대로 반영 — 이
+// 타입 하나만 내보내면 계정 정보·다른 시즌·자금 등 비공개 정보 없이 공유할 수 있다(exportReplay).
+// 새 패치가 나와도 이미 저장된 항목은 그대로 둔다(재계산 없음) — engineVersion 필드가 "이건 그 시점
+// 버전의 산출물"이라는 사실을 영구히 증언한다.
+export type ReplayEntry={id:string,season:number,split:'SPRING'|'SUMMER',a:string,b:string,engineVersion:number,ruleVersion:string,result:SetResult};
+export const REPLAY_CAP=8;
 export type Game={version:number,seed:number,season:number,split:'SPRING'|'SUMMER',round:number,stage:'REGULAR'|'PLAYOFF'|'INTERNATIONAL',phase:'PLAN'|'PREP'|'DRAFT'|'TACTICAL'|'RECAP'|'MATCH_END'|'SPLIT_END'|'OFFSEASON'|'WORLD_END',teamId:string,players:Player[],teams:Team[],fixtures:string[][][],match:Match|null,history:RecordMatch[],scout?:Record<string,SetScout[]>,trainingLog?:TrainingLogEntry[],news:string[],hall:{season:number,split:string,champion:string,rank:number}[],po:Match[],poSeeds:string[],champion:string|null,trained:boolean,offWeek:number,ledger:{label:string,amount:number}[],planNotice:string[],meta:string[],international?:International,settledWeeks?:number,sandbox?:boolean,
  // F25: 연습 모드 — 마지막 실행 결과 하나만 보존한다(비교는 시드를 바꿔 다시 실행하는 방식). 시즌
  // 기록(g.history)·선수 상태(burn/form/mastery/POG)·팀 승패에는 전혀 연결되지 않는다 — simulateSet은
  // 순수 계산이고, 이 필드는 finishMatch()가 절대 건드리지 않는 별도 저장소이기 때문에 구조적으로 섞일
  // 수 없다(코드 경로 자체가 없음, 조건문으로 막은 게 아님).
- sandboxLast?:{a:string,b:string,seed:number,result:SetResult}};
+ sandboxLast?:{a:string,b:string,seed:number,result:SetResult},
+ // F26: 최근 REPLAY_CAP개 세트만 보존(사용자 팀 경기만 — 배경 리그 전체를 저장하면 용량이 무한히 는다).
+ replays?:ReplayEntry[]};
 export type Command={type:string,payload?:Record<string,unknown>};
 export const clamp=(v:number,a=0,b=100)=>Math.min(b,Math.max(a,v));
 export const avg=(ns:number[])=>ns.reduce((a,b)=>a+b,0)/(ns.length||1);
@@ -666,6 +681,14 @@ function finishMatch(g:Game,m:Match){m.winner=m.scoreA>m.scoreB?m.a:m.b;const a=
  }
  for(const s of m.sets)for(const A of [true,false]){const tid=A?m.a:m.b,picks=A?s.draft.picksA:s.draft.picksB,lineup=A?s.lineupA:s.lineupB,won=m.winner===tid,coach=team(g,tid).staff?.coach??0;for(let i=0;i<5;i++){const pl=g.players.find(x=>x.id===lineup[i]);if(!pl||pl.id.startsWith('emergency')||!picks[i])continue;gainMastery(pl,picks[i],Math.round((4+(won?2:0)+(s.pog===pl.id?3:0))*(1+coach*.1)));}}
  g.history.unshift({id:m.id,a:m.a,b:m.b,sa:m.scoreA,sb:m.scoreB,winner:m.winner,label:m.label,season:g.season});g.history=g.history.slice(0,400);
+ // F26: 사용자 팀이 낀 경기만 리플레이로 보존한다(배경 리그 전체 경기까지 저장하면 이 함수가 매 라운드
+ // 9경기어치 더 돌아 용량·성능에 안 맞는다) — 스카우팅(F16)이 상대 팀 데이터까지 남기는 것과는 범위가
+ // 다르다는 점에 주의(이건 "내가 다시 볼 경기"만).
+ if(m.a===g.teamId||m.b===g.teamId){
+  g.replays??=[];
+  for(const [i,s] of m.sets.entries())g.replays.unshift({id:`${m.id}-set${i}`,season:g.season,split:g.split,a:m.a,b:m.b,engineVersion:ENGINE_VERSION,ruleVersion:RULE_VERSION,result:s});
+  g.replays=g.replays.slice(0,REPLAY_CAP);
+ }
  // F16: 세트마다 양 팀 관점으로 스카우팅 표본을 하나씩 남긴다(원본 사건 전체가 아니라 요약값만 — 저장 용량 제한).
  if(!g.scout)g.scout={};
  for(const [tid,side] of [[m.a,'A'],[m.b,'B']] as [string,Side][]){

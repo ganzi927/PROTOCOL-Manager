@@ -32,9 +32,13 @@ const STR={
 };
 
 // 위치는 rAF에서 DOM 직접 갱신. 이산 상태(점수·골드·피드·중계·구조물)만 저압축 리렌더.
-export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEnd,onProgress}:{
+export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEnd,onProgress,initialSeek}:{
  set:SetLike, teamA:string, teamB:string, mineIsA:boolean,
  names:{a:string[],b:string[]}, onSelectPlayer:(id:string)=>void, onEnd?:()=>void, onProgress?:(seq:number)=>void,
+ // F26: "주요 장면" 북마크 클릭으로 특정 시각부터 보게 한다. 마운트 시 한 번만 적용(값이 바뀌어도 다시
+ // 안 뛴다 — 다른 장면으로 옮기려면 부모가 key를 바꿔 통째로 재마운트한다, RECAP 화면이 세트 전환마다
+ // 이미 하는 방식과 동일). 생략하면(기존 모든 호출부) 0초부터 정상 재생 — 동작 변화 없음.
+ initialSeek?:number,
 }){
  const rd=useMemo<ReplayData>(()=>buildReplay(set),[set]);
  const styles=useMemo(()=>({A:compositionPlan(set.draft.picksA).style,B:compositionPlan(set.draft.picksB).style}),[set.draft]);
@@ -128,6 +132,9 @@ export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEn
  };
  const nextEvent=()=>{const w=rd.windows.find(w=>w.start>tRef.current+0.05);seek(w?w.start:rd.duration);};
  const restart=()=>{endedRef.current=false;lastTDisp.current=0;setTDisplay(0);tRef.current=0;playingRef.current=true;setPlaying(true);lastRef.current=performance.now();lastSnapKey.current='';paint(0);};
+ // F26: 마운트당 한 번만 — initialSeek가 없으면(기존 모든 호출부) 아무 일도 안 한다.
+ // eslint-disable-next-line react-hooks/exhaustive-deps
+ useEffect(()=>{ if(initialSeek!==undefined) seek(initialSeek); },[rd]);
 
  // 통로(WALK) — 디버그에서 보행 가능 영역
  const navLines=useMemo(()=>rd.nav.segs.map((s,i)=><line key={i} x1={s[0][0]} y1={s[0][1]} x2={s[1][0]} y2={s[1][1]} className="rt-nav"/>),[rd]);

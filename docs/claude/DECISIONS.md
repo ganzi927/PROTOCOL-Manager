@@ -835,6 +835,35 @@ F23을 "체크리스트"로 취급해 하나하나 증거로 확인한 뒤, 실�
 
 관련: F19~F24(먼저 감사, 재사용 우선 원칙) / `simulateSet`/`finishMatch`의 기존 책임 분리(F04~F14 설계 자산, 이번엔 그 경계를 그대로 활용만 함).
 
+## D031 — F26 리플레이·공유·관전 기록: DB 없이 `Game` 안에 캡드 배열로, 오래된 F04 설계 부채를 지금 갚는다
+
+2026-09-16. F26(리플레이·공유·관전 기록) 완료 조건: "세이브 전체 대신 경기 ID·엔진 버전·규칙 버전·허용된 경기 사건으로 독립 리플레이를 만들라. 주요 장면 북마크와 사건 링크를 우선 구현한다. 영상 내보내기는 재생 안정화 뒤 선택 기능으로 둔다. 예전 리플레이를 새 패치로 재계산하지 않는다. 공개 공유에는 계정 식별자·비공개 저장 정보가 들어가지 않는다. 전투 근거·KDA·넥서스 결과가 원본과 일치한다."
+
+### 문제
+`g.history`는 스코어라인만 남기고 전체 `SetResult`(이벤트·KDA·드래프트)는 매치가 `MATCH_END`를 지나면 그대로 버려진다. DB는 슬롯당 JSON 하나(`careers` 테이블)뿐이라 새 테이블을 추가하려면 운영 DB 마이그레이션이 필요한데, 사용자 승인 없이 할 일이 아니라고 판단해 배제했다. 또한 `simulationVersion`은 F04 설계 의도에만 있었고 실제로는 어디에도 구현되지 않은 죽은 개념이었다(grep으로 확인).
+
+### 선택
+1. **`Game.replays?:ReplayEntry[]`로 `Game` JSON 안에 직접 저장, 새 테이블 없음.** F16(`g.scout`)·F17(`g.trainingLog`)이 이미 쓴 "캡드 배열을 세이브 blob 안에" 패턴을 그대로 재사용 — `REPLAY_CAP=8`로 최근 8세트까지만 보존(`.slice(0,REPLAY_CAP)`), FIFO로 오래된 것부터 밀림.
+2. **`finishMatch()`에 `if(m.a===g.teamId||m.b===g.teamId)` 스코프 가드.** 감사 중 `finishMatch`가 사용자 본인 경기(`case 'continue'`)뿐 아니라 매 라운드 `autoMatch()`가 처리하는 리그 전체 AI-vs-AI 경기에도 호출된다는 걸 발견 — 가드 없이 넣으면 매 라운드 9경기어치가 전부 쌓여 무제한 증가한다. 사용자 팀이 낀 경기만 필터링해 이 문제를 원천 차단.
+3. **F04의 `simulationVersion` 의도를 `ENGINE_VERSION=1`/`RULE_VERSION='classic-v1'`으로 지금 구현.** 저장 시점 값을 각 `ReplayEntry`에 고정 스탬프 — 이후 엔진이 바뀌어도 이미 저장된 리플레이의 값은 절대 갱신되지 않으므로 "예전 리플레이는 재계산되지 않는다"가 구조적으로 보장된다(재계산 코드 경로 자체가 없음 — D030과 같은 논리).
+4. **"주요 장면" 북마크는 새 판정 로직을 만들지 않고 이미 있는 `GameEvent.tier`를 재사용.** `lib/simulation/replay.ts`의 `ReplayWindow`에 `tier?:string` 필드만 추가해 narration.ts가 이미 계산해 둔 tier(`decisive`/`close`/`clash`/`quiet`/`build`)를 그대로 옮겼다. UI(`app/manager.tsx`)는 `rd.windows.filter(w=>w.tier==='decisive'||w.tier==='close')`로 칩을 만들고, 클릭 시 `ReplayTheater`의 새 `initialSeek?:number` prop(마운트 시 1회 `seek()` 호출)으로 이동한다 — 다른 순간으로 다시 이동하려면 부모가 `key`를 바꿔 리마운트시키는, RECAP 화면이 이미 쓰던 패턴을 그대로 따름.
+5. **내보내기 파일은 `ReplayEntry` 하나만.** `{format:'protocol-replay-v1', exportedAt, replay}` — 계정 식별자·세이브 revision·다른 경기 정보는 전혀 포함하지 않는다(브라우저에서 실제로 내보낸 JSON을 캡처해 직접 확인). 가져오기는 100% 클라이언트 전용으로 서버에 전혀 닿지 않으며, `setReplayOpen`으로 그 자리에서 바로 보여줄 뿐 `g.replays`에 저장하지 않는다(공유받은 리플레이가 내 보관함을 오염시키지 않음).
+6. **영상 내보내기는 이번 범위에서 제외.** 완료 조건에 "재생 안정화 뒤 선택 기능으로 둔다"고 명시돼 있어 v1은 JSON 내보내기/가져오기까지만 구현.
+
+### 이유
+DB 마이그레이션 없이 "예전 리플레이는 재계산하지 않는다"와 "공유에 계정 정보 없음"을 동시에 만족시키려면, 저장 형태를 세이브 blob 안의 불변 스냅샷으로 못 박는 게 가장 단순하고 검증 가능한 방법이었다. `finishMatch`가 리그 전체 경기에 쓰인다는 사실을 감사 단계에서 미리 찾지 못했다면 스토리지가 무제한으로 늘어나는 버그가 조용히 들어갈 뻔했다 — "먼저 감사"가 이번에도 구조적 결함을 사전에 잡아낸 사례.
+
+### 영향
+- 신규: `lib/game.ts`의 `ENGINE_VERSION`/`RULE_VERSION`/`ReplayEntry`/`REPLAY_CAP`/`Game.replays`, `finishMatch()` 내 리플레이 적립 블록, `lib/simulation/replay.ts`의 `ReplayWindow.tier`, `app/replay-theater.tsx`의 `initialSeek` prop, `app/manager.tsx`의 "리플레이 보관함" 뷰·내보내기/가져오기 핸들러, `app/globals.css`의 `.highlight-list`/`.highlight-chip`, `tests/replay-archive.test.mjs`(4섹션).
+- 회귀 위험 검토: `finishMatch`(핵심·자주 호출되는 함수) 수정 — `management.test.mjs`·`engine.test.mjs`(3커리어·4시즌·1100+ 유저 세트) 재확인 PASS. lint 에러 수는 변경 전후 동일(18개, 전부 기존 파일의 기존 이슈, 이번 변경이 새로 만든 건 0개). 브라우저 실측: 실제 Bo3 매치 2세트를 끝까지 플레이해 `g.replays`에 두 항목이 정확한 엔진/규칙 버전과 함께 적립됨을 API로 직접 확인, 보관함 목록·상세 화면·주요 장면 칩 클릭 시딩(정확한 타임코드로 이동)·내보내기(계정 정보 없는 단일 리플레이 JSON 캡처로 확인)·가져오기(내보낸 파일을 그대로 재주입해 원본과 동일하게 렌더링 확인)까지 전부 실제 UI로 검증.
+
+### 대안(기각)
+- **새 DB 테이블(`replays`)로 저장.** 더 깔끔한 스키마지만 운영 DB 마이그레이션이 필요해 이번 세션 권한 범위를 넘는다고 판단 — 세이브 blob 확장으로도 완료 조건을 전부 만족할 수 있어 배제.
+- **리그 전체 경기를 다 저장.** "관전" 기능 확장 여지는 있지만 스토리지가 감당 안 되고 완료 조건도 "허용된 경기 사건"(사용자 팀 맥락)으로 읽혀 v1은 사용자 팀 경기로 한정.
+- **영상(비디오) 내보내기.** 완료 조건에 명시된 대로 재생 안정화 이후로 미룸 — 이번엔 JSON 스냅샷 + 기존 `ReplayTheater` 재생으로 충분.
+
+관련: F16/F17(캡드 배열 세이브 패턴 선례) / F24(내보내기·가져오기 UX, 클라이언트 전용 가져오기 패턴) / F25(결과 재생에 `ReplayTheater` 재사용 선례) / D030(코드 경로 부재로 보장을 구조화하는 동일 논리).
+
 ## 새 결정 형식
 ID / 날짜 / 문제 / 선택 / 이유 / 영향 / 대안 / 관련 작업 ID. 실제로 정하지 않은 사항은 제안이라고 표시한다.
 

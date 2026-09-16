@@ -103,7 +103,9 @@ export type ReplayBeat={
 export type Act='lane'|'jungle'|'roam'|'group'|'fight'|'retreat'|'recall'|'base'|'dead';
 export type TrackKey={t:number, pos:Vec, state:'idle'|'move'|'fight'|'dead', act?:Act, reason?:string};
 export type Track={side:Side, slot:Slot, key:TrackKey[]};
-export type ReplayWindow={seq:number, start:number, end:number, engineClock:number, label:string, kind:string};
+// F26: tier는 선택 필드다(기존 소비자 무영향) — "주요 장면" 북마크가 decisive/close만 골라내는 데 쓴다.
+// GameEvent.tier를 그대로 옮길 뿐 여기서 새로 판정하지 않는다(narration.ts의 기존 판정 재사용).
+export type ReplayWindow={seq:number, start:number, end:number, engineClock:number, label:string, kind:string, tier?:string};
 export type ReplayData={
  duration:number,
  windows:ReplayWindow[],
@@ -495,7 +497,7 @@ export function buildReplay(set:{events:any[],lineupA:string[],lineupB:string[],
    ev.tail=8+ev.kills.length*5; // Never release actors before the final recorded kill.
    ev.lead=lead; ev.armed=true;
    windows.push({seq:ev.idx,start:T(ev.stime-lead),end:T(ev.stime+ev.tail),engineClock:ev.eclock,
-    label:ev.e.title,kind:ev.cb?ev.cb.kind:'teamfight'});
+    label:ev.e.title,kind:ev.cb?ev.cb.kind:'teamfight',tier:ev.e.tier});
    ei++;
   }
   for(const a of agents){

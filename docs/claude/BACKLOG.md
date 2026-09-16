@@ -28,6 +28,7 @@
 | F23 | P4 | DONE | 모바일과 경기 길이 조절. 감사 결과 프레임률-엔진 독립·키보드 포커스·CSS 모션 감소·색상 외 진영 구분·밀도(density) 토글이 이미 충족돼 있었음을 확인(재구현 안 함). 진짜 공백(미니맵 선수 이동이 JS `requestAnimationFrame` 직접 갱신이라 `prefers-reduced-motion` CSS가 못 미침)만 보완: `formationOffset`에 선택적 `reducedMotion` 인자(D028), 모션 감소 시 페인트 빈도만 축소(엔진 시계는 그대로). 좁은 화면 첫 진입 시 리캡 밀도 기본값 'summary'. 실제 모바일 뷰포트 렌더링은 5세션 연속 도구 제약으로 여전히 BLOCKED — 정직하게 기록. 아래 "F23" 절 참조 |
 | F24 | P4 | DONE | 저장 안정성과 세이브 이동. 감사 결과 명령 영수증(commandId 중복 방지)·revision 낙관적 동시성(DB 레벨 CAS)·백업 로테이션·미래버전 거부가 이미 탄탄하게 구현돼 있었음을 확인(재구현 안 함). 유일한 진짜 공백(내보내기는 있는데 가져오기가 없음 — 설정 화면이 스스로 "지원 안 함"이라 명시하고 있었음)만 구현: `importSave` 명령을 기존 revision/영수증/백업 경로에 그대로 태워 "원본 보존"을 공짜로 확보(D029). 형식 검사는 shape 확인, 버전 검사는 기존 `upgradeGame()` 재사용. 브라우저에서 내보내기→값 변경→가져오기→반영 확인→복원 지점 원상복구까지 전체 왕복 실측 완료. 아래 "F24" 절 참조 |
 | F25 | P4 | IN_PROGRESS | 첫 경기 튜토리얼과 연습 모드. **연습 모드 완료**: `Game.sandbox?:boolean`(죽은 필드였음)를 실제 구현 — `simulateSet`이 이미 순수 함수라 `finishMatch`를 안 부르면 시즌 기록·선수 상태에 구조적으로 안 섞임을 활용, `sandboxMatch` 명령이 기존 저장 인프라만 재사용(D030). 기존 `ReplayTheater` 그대로 재사용해 미니맵까지 동일 품질로 제공, 시드 기반 재현("같은 조건 다시 보기") 브라우저 실측 확인. **첫 경기 튜토리얼은 아직 미착수** — 아래 "F25" 절 "다음" 참조 |
+| F26 | P4 | DONE | 리플레이·공유·관전 기록. 새 DB 테이블 없이 `Game.replays?:ReplayEntry[]`(캡드 배열, `REPLAY_CAP=8`)를 세이브 blob 안에 직접 저장 — F16/F17이 쓴 패턴 재사용. `finishMatch`가 리그 전체(AI 매치 포함) 경기마다 호출된다는 걸 감사로 발견해 `m.a===g.teamId\|\|m.b===g.teamId` 가드로 사용자 팀 경기만 적립. F04에 설계만 있고 실구현이 없던 `simulationVersion` 개념을 `ENGINE_VERSION`/`RULE_VERSION` 스탬프로 지금 구현해 "예전 리플레이 재계산 안 함"을 코드 경로 부재로 보장(D031). "주요 장면" 북마크는 새 판정 없이 기존 `GameEvent.tier`를 `ReplayWindow.tier`로 옮겨 재사용, `ReplayTheater`엔 `initialSeek` prop만 추가. 내보내기는 계정 정보 없는 단일 리플레이 JSON, 가져오기는 100% 클라이언트 전용(서버 미접촉, 보관함 미저장). 브라우저에서 실제 Bo3 2세트 플레이→목록/상세/칩 시딩/내보내기/가져오기 전부 실측 확인. 아래 "F26" 절 참조 |
 
 ## TRAIN-01 — 완료 (2026-09-10)
 관련: lib/game.ts의 training/train/gainMastery, app/manager.tsx의 champTrainOptions.
@@ -360,3 +361,19 @@
 ### 알려진 제한
 - **커스텀 픽/밴 연습은 안 됨** — v1은 팀 매치업만 고정, 조합은 자동 드래프트(`pickDraft`)로 결정된다. 같은 시드면 같은 조합이 재현되지만, "원하는 특정 조합끼리" 비교하는 건 다음 조각.
 - 첫 경기 튜토리얼 자체가 미착수 — F25 제목의 절반만 완료됐다고 정직하게 기록한다.
+
+## F26 — 리플레이·공유·관전 기록 (2026-09-16) — 완료
+근거: `docs/claude/PROTOCOL-Claude-Development-Orders.md`의 F26. 설계 결정은 `DECISIONS.md`의 **D031** 참조.
+
+### 완료
+`g.history`가 스코어라인만 남기고 전체 `SetResult`는 매치 종료 후 버려진다는 것, DB가 슬롯당 JSON 하나(`careers` 테이블)뿐이라 새 테이블엔 운영 마이그레이션이 필요하다는 것, `simulationVersion`이 F04 설계 의도에만 있었고 실구현된 적이 없다는 것(grep 확인)을 먼저 확인. 새 테이블 없이 `Game.replays?:ReplayEntry[]`를 세이브 blob 안에 직접 저장하는 쪽을 택함 — F16(`g.scout`)/F17(`g.trainingLog`)의 캡드 배열 패턴 재사용, `REPLAY_CAP=8`로 최근 8세트만 보존.
+`finishMatch()`를 감사하며 사용자 본인 경기(`case 'continue'`)뿐 아니라 매 라운드 `autoMatch()`의 리그 전체 AI-vs-AI 경기에도 호출된다는 걸 발견 — 가드 없이 넣으면 무제한 증가로 이어질 뻔했다. `if(m.a===g.teamId||m.b===g.teamId)` 스코프 가드로 사용자 팀 경기만 적립되게 막음.
+저장 시 `ENGINE_VERSION=1`/`RULE_VERSION='classic-v1'`을 각 항목에 고정 스탬프 — F04가 설계만 하고 구현하지 않았던 `simulationVersion` 개념을 이번에 실제로 만들었다. 재계산 코드 경로 자체가 없으므로 "예전 리플레이는 엔진이 바뀌어도 안 바뀐다"가 조건문이 아니라 구조로 보장된다(D030과 동일 논리).
+"주요 장면" 북마크는 새 tier 판정을 만들지 않고 narration.ts가 이미 계산해 둔 `GameEvent.tier`를 `lib/simulation/replay.ts`의 `ReplayWindow.tier`로 그대로 옮겨 재사용. `app/manager.tsx`는 `decisive`/`close` tier만 칩으로 노출하고, 클릭 시 `ReplayTheater`의 새 `initialSeek?:number` prop(마운트 시 1회 `seek()`)으로 이동 — 다른 순간을 다시 보려면 부모가 `key`를 바꿔 리마운트하는, RECAP 화면이 이미 쓰던 패턴을 그대로 따름.
+내보내기는 `{format:'protocol-replay-v1', exportedAt, replay}` 하나만 담아 계정 식별자·세이브 정보가 전혀 없음을 브라우저에서 실제 내보낸 JSON을 캡처해 직접 확인. 가져오기는 100% 클라이언트 전용(서버 미접촉)이며 `setReplayOpen`으로 그 자리에서만 보여주고 `g.replays`엔 저장하지 않아 공유받은 리플레이가 내 보관함을 오염시키지 않는다. 영상 내보내기는 완료 조건이 "재생 안정화 뒤 선택 기능"이라 명시해 이번 범위에서 제외.
+검증: `tests/replay-archive.test.mjs` 신설(4섹션 — 사용자 팀 경기만 적립·엔진/규칙 버전 스탬프·CAP 적용, 배경 리그 경기는 미적립, 이후 진행과 무관하게 저장된 항목 불변, `ReplayWindow.tier`가 원본 `GameEvent.tier`를 그대로 반영), 첫 실행 PASS. tsc·`npm run build`·eslint(변경 전후 동일하게 18 errors/15 warnings, 이번 변경이 새로 만든 에러 0개)·`management.test.mjs`·`engine.test.mjs`(3커리어·1106+ 유저 세트) 전부 재확인 PASS. **브라우저 실측**: 실제 T1 vs GEN Bo3 매치를 드래프트→경기→매치 결산까지 2세트 완주해 `g.replays`에 두 항목이 정확한 엔진(v1)/규칙(classic-v1) 버전과 함께 적립됨을 API로 확인 → "리플레이 보관함" 목록 화면(상대·시즌·결과·보기/내보내기 버튼) 정상 렌더 → 상세 화면(미니맵·KDA·주요 장면 칩 5개) 정상 렌더 → 칩 클릭 시 정확한 타임코드(29:23)로 즉시 이동 확인 → 내보내기 클릭 시 성공 토스트 + `URL.createObjectURL` 캡처로 payload가 리플레이 단 하나(계정/세이브 정보 없음)임을 직접 검증 → 그 파일을 "공유받은 리플레이 보기"로 재주입해 원본과 동일하게 렌더링됨을 확인. 콘솔 에러 없음.
+
+### 알려진 제한
+- **영상(비디오) 내보내기 없음** — 완료 조건이 명시한 대로 재생 안정화 이후로 미룸. 현재는 JSON 스냅샷 + 기존 `ReplayTheater` 재생만 지원.
+- **"엔진 버전"과 "스키마 버전"(`Game.version`)은 이번에 처음으로 실질적으로 분리됨** — 다만 `ENGINE_VERSION`은 아직 상수 1 고정이라 실제 엔진 로직이 바뀔 때 이 값을 올리는 절차는 별도로 마련돼 있지 않다(다음에 엔진을 바꿀 때 사람이 기억해서 올려야 함).
+- 사용자 팀이 아닌 경기의 관전 리플레이는 v1 범위 밖 — "허용된 경기 사건"을 사용자 팀 맥락으로 좁게 해석했다.

@@ -800,6 +800,16 @@ export function applyCommand(source:Game,cmd:Command):Game{const g=upgradeGame(s
  case 'release':{requirePhase(g,['OFFSEASON']);const x=roster(g).find(x=>x.id===p.id);if(!x)throw Error('선수를 찾지 못했습니다.');const cost=releaseCost(g,x);if(team(g).cash<cost)throw Error(`보장 연봉 ${money(cost)}이 부족합니다.`);pay(g,team(g),-cost,'방출 정산 · '+x.name);x.teamId=null;x.releasedSeason=g.season;delete x.nextSalary;delete x.nextUntil;news(g,`${x.name} 방출. 보장급여 정산 완료.`);break;}
  case 'hireStaff':{requirePhase(g,['PLAN','PREP','OFFSEASON','SPLIT_END','WORLD_END']);const id=String(p.id),level=Number(p.level);if(!STAFF.some(x=>x.id===id)||!Number.isInteger(level)||level<0||level>3)throw Error('스태프 등급을 확인해 주세요.');const t=team(g);t.staff??={coach:0,analyst:0,psych:0};const current=t.staff[id]??0;if(current===level)throw Error('이미 고용한 등급입니다.');const fee=Math.max(0,Math.round((STAFF_COST[level]-STAFF_COST[current])*.1));if(t.cash<fee)throw Error('고용 계약금이 부족합니다.');pay(g,t,-fee,'스태프 계약금');t.staff[id]=level;news(g,`${STAFF.find(x=>x.id===id)!.name} ${level?level+'등급 고용':'계약 종료'}`);break;}
  case 'trade':{requirePhase(g,['OFFSEASON']);const a=roster(g).find(x=>x.id===p.offer),b=g.players.find(x=>x.id===p.target&&x.teamId&&x.teamId!==g.teamId);if(!a||!b||a.role!==b.role)throw Error('같은 포지션의 선수 교환만 가능합니다.');const other=team(g,b.teamId!);const quote=tradeQuote(g,a,b);if(quote.reason)throw Error(quote.reason);pay(g,team(g),-quote.cash,'트레이드 보상금 · '+b.name);pay(g,other,quote.cash,'트레이드 보상금');const old=other.id;a.teamId=old;b.teamId=g.teamId;if(team(g).lineup[a.role]===a.id)team(g).lineup[a.role]=b.id;if(other.lineup[b.role]===b.id)other.lineup[b.role]=a.id;news(g,`${a.name} ↔ ${b.name} 트레이드 성사`);break;}
+ // F24: 세이브 가져오기 — 기존 슬롯의 revision·명령 영수증·백업 로테이션을 그대로 타는 일반 명령으로
+ // 구현했다(별도 API 경로를 새로 만들지 않음). 그래서 "원본 보존"이 공짜로 따라온다 — API route의
+ // UPDATE가 이 명령 적용 직전 상태를 backups[]에 넣고 나서 덮어쓰므로, 가져오기가 잘못돼도 기존
+ // "이 시점으로 복원" UI로 그대로 되돌릴 수 있다. 빈 슬롯(아직 커리어가 없는 슬롯)으로의 가져오기는
+ // 이번엔 지원하지 않는다 — 먼저 아무 팀으로 커리어를 만든 뒤 가져오면 된다(범위를 의도적으로 좁힘).
+ case 'importSave':{
+  const imported=p.game as Game;
+  if(!imported||typeof imported!=='object'||typeof imported.teamId!=='string'||!Array.isArray(imported.players)||!Array.isArray(imported.teams)||typeof imported.season!=='number'||typeof imported.version!=='number')throw Error('가져올 파일의 형식을 확인해 주세요.');
+  return upgradeGame(structuredClone(imported)); // 구버전은 여기서 마이그레이션, 미래 버전은 여기서 명시적으로 거부됨(기존 upgradeGame 규칙 재사용)
+ }
  default:throw Error('알 수 없는 작업입니다.');}
  return g;}
 

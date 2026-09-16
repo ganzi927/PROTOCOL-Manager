@@ -216,6 +216,23 @@ function bestOpponentReply(g:Game,ds:DraftState):number{
  }
  return best;
 }
+// F21: 세트 사이 적응 — 이 "시리즈"(m.sets, 같은 매치 안에서 이미 끝난 세트만) 안에서 실제로 관측된
+// 결과만 신호로 쓴다. 피어리스 드래프트(밴 자체가 세트를 넘어 누적)는 이 게임이 지원하지 않는다고
+// 이미 명시돼 있다 — 그래서 이건 "다시 못 고른다"는 규칙이 아니라 AI의 우선순위를 조금 미는 것뿐이다
+// (감점/가점, 하드 배제 없음). draftRecommendations도 같은 신호를 써서 사용자에게 그대로 보여준다 —
+// AI만 몰래 아는 정보가 없게 한다(F07의 "사람이 읽을 수 있는 AI 밴픽" 원칙 연장).
+export function seriesSignal(m:Match,teamId:string):{oppWinChamps:Set<string>,myLossChamps:Set<string>}{
+ const oppId=teamId===m.a?m.b:m.a;
+ const oppWinChamps=new Set<string>(),myLossChamps=new Set<string>();
+ for(const s of m.sets){
+  const myPicks=teamId===m.a?s.draft.picksA:s.draft.picksB;
+  const oppPicks=oppId===m.a?s.draft.picksA:s.draft.picksB;
+  if(s.winner===oppId)for(const c of oppPicks)oppWinChamps.add(c);
+  if(s.winner===teamId)continue; // 내가 이긴 세트의 내 픽은 오히려 계속 쓸 이유가 된다 — 신호 없음
+  if(s.winner===oppId)for(const c of myPicks)myLossChamps.add(c);
+ }
+ return {oppWinChamps,myLossChamps};
+}
 function aiPick(g:Game,m:Match,ds:DraftState):string{
  const [side,kind]=DRAFT_ORDER[ds.step];const teamId=side==='B'?ds.blue:ds.red,oppId=teamId===ds.blue?ds.red:ds.blue;
  const cands=legalDraftCandidates(g,ds);
@@ -226,18 +243,20 @@ function aiPick(g:Game,m:Match,ds:DraftState):string{
  const rate=(ps:Player[],champ:string)=>{let m=0;for(const p of ps)m=Math.max(m,masteryLevel(p,champ));return m;};
  const cov:Record<string,number>={};for(const p of draftPicksOf(ds,teamId))cov[champById(p.champ).role]=(cov[champById(p.champ).role]??0)+1;
  const open=ROLES.filter(r=>!cov[r]);
+ // F21: 세트 사이 적응 — m.sets가 비어 있으면(1세트) 신호도 비어 있어 기존과 100% 동일.
+ const {oppWinChamps,myLossChamps}=seriesSignal(m,teamId);
  const scored:{id:string,s:number}[]=[];
  for(const c of cands){
   const meta=metaSet.has(c.id)?3:0;let s:number;
   if(kind==='BAN'){
    const enemy=draftPicksOf(ds,oppId).map(p=>p.champ), own=draftPicksOf(ds,teamId).map(p=>p.champ);
-   s=rate(opp,c.id)*2+meta+draftFitScore([...enemy,c.id],own)*1.5;
+   s=rate(opp,c.id)*2+meta+draftFitScore([...enemy,c.id],own)*1.5+(oppWinChamps.has(c.id)?3:0);
   }
   else{
    const fitRole=open.includes(c.role)?c.role:c.flex.find(f=>open.includes(f))??open[0]??c.role;
    const fit=!open.length?0:open.includes(c.role)?4:c.flex.some(f=>open.includes(f))?1.5:-5;
    const player=mine[ROLES.indexOf(fitRole)];
-   s=draftFitScore([...draftPicksOf(ds,teamId).map(p=>p.champ),c.id],draftPicksOf(ds,oppId).map(p=>p.champ))*1.5+fit+(player?masteryLevel(player,c.id)*2:0)+(t.tactic==='early'&&c.tags.includes('engage')?2:t.tactic==='late'&&c.tags.includes('scale')?2:0)+meta;
+   s=draftFitScore([...draftPicksOf(ds,teamId).map(p=>p.champ),c.id],draftPicksOf(ds,oppId).map(p=>p.champ))*1.5+fit+(player?masteryLevel(player,c.id)*2:0)+(t.tactic==='early'&&c.tags.includes('engage')?2:t.tactic==='late'&&c.tags.includes('scale')?2:0)+meta-(myLossChamps.has(c.id)?0.5:0);
   }
   s+=rng()*noise;
   scored.push({id:c.id,s});
@@ -817,12 +836,16 @@ function finishInternational(g:Game){const i=g.international!;i.champion=i.brack
 }
 
 // Draft recommendations share the same composition evaluator as AI; no future match seed.
-export function draftRecommendations(g:Game,ds:DraftState,teamId:string,kind:'BAN'|'PICK'){
+// F21: m(현재 매치)을 선택 인자로 받아 aiPick과 같은 seriesSignal을 노출한다 — AI만 아는 정보가
+// 없도록, 사용자가 직접 픽/밴할 때도 "상대가 세트1에서 이긴 챔피언"·"우리가 세트1에서 진 픽"을
+// 똑같이 볼 수 있게 한다. m을 생략하면(과거 호출부·테스트) 신호가 비어 있어 기존과 100% 동일.
+export function draftRecommendations(g:Game,ds:DraftState,teamId:string,kind:'BAN'|'PICK',m?:Match){
  const other=teamId===ds.blue?ds.red:ds.blue;
  const own=draftPicksOf(ds,teamId).map(p=>p.champ),enemy=draftPicksOf(ds,other).map(p=>p.champ);
  const ids=kind==='PICK'?own:enemy,players=starters(g,kind==='PICK'?teamId:other);
  const opposition=kind==='PICK'?enemy:own;
  const base=draftFitScore(ids,opposition);
+ const {oppWinChamps,myLossChamps}=m?seriesSignal(m,teamId):{oppWinChamps:new Set<string>(),myLossChamps:new Set<string>()};
  return legalDraftCandidates(g,ds).map(c=>{
   const picks=[...ids,c.id];let best=-Infinity,role:Role=c.role,mastery=0;
   for(const perm of ROLE_PERMS){
@@ -831,7 +854,8 @@ export function draftRecommendations(g:Game,ds:DraftState,teamId:string,kind:'BA
    if(score>best){best=score;role=perm[picks.length-1];mastery=masteryLevel(players[ROLES.indexOf(role)],c.id);}
   }
   const fit=draftFitScore(picks,opposition)-base;
-  const score=best+fit*1.5+(isMeta(g,c.id)?3:0);
-  return {champ:c.id,score,role,reason:`${kind==='BAN'?'상대':'배정'} ${role} · 숙련 Lv${mastery} · ${compositionPlan(picks).label}${roleFit(c.id,role)==='off'?' · 오프롤 주의':''}`};
+  const seriesNote=kind==='BAN'&&oppWinChamps.has(c.id)?' · 상대가 이전 세트 승리에 썼던 챔피언':kind==='PICK'&&myLossChamps.has(c.id)?' · 우리가 이전 세트 패배에 썼던 챔피언(주의)':'';
+  const score=best+fit*1.5+(isMeta(g,c.id)?3:0)+(kind==='BAN'&&oppWinChamps.has(c.id)?4:0)-(kind==='PICK'&&myLossChamps.has(c.id)?3:0);
+  return {champ:c.id,score,role,reason:`${kind==='BAN'?'상대':'배정'} ${role} · 숙련 Lv${mastery} · ${compositionPlan(picks).label}${roleFit(c.id,role)==='off'?' · 오프롤 주의':''}${seriesNote}`};
  }).sort((a,b)=>b.score-a.score||a.champ.localeCompare(b.champ)).slice(0,3);
 }

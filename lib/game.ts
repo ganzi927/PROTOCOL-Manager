@@ -134,6 +134,46 @@ export const nextSeasonPayroll=(g:Game,id=g.teamId)=>roster(g,id).reduce((a,p)=>
 // 순수익)을 단일 함수로 옮겼다 — 계약 화면에서도 같은 수치를 보여주기 위함이지 새 공식을 만든 게 아니다.
 export const annualBalance=(g:Game,id=g.teamId)=>{const t=team(g,id);return Math.round(320000+30000*t.fan/100-50000-payroll(g,id)-staffCost(t));};
 export function standings(g:Game){return [...g.teams].filter(domestic).sort((a,b)=>b.wins-a.wins||(b.sw-b.sl)-(a.sw-a.sl)||head(a.id,b.id)||hash(g.seed+a.id)-hash(g.seed+b.id));function head(a:string,b:string){return g.history.filter(m=>m.season===g.season&&m.label.startsWith(g.split+' R')&&((m.a===a&&m.b===b)||(m.a===b&&m.b===a))).reduce((v,m)=>v+(m.winner===a?-1:1),0);}}
+// F22: 시즌 서사 — g.history/standings/로스터의 실제 기록만 읽는다. 무작위 뉴스 문구를 새로 만들지
+// 않고, 감지된 사실을 근거와 함께 그대로 문장으로 만든다("연승" 같은 표현도 실제 g.history 연속
+// 승패에서만 나온다). "신인 성장"은 시즌 시작 시점 스탯 스냅샷이 없어 이번엔 만들지 않았다(다음 조각).
+export type Storyline={kind:'streak'|'competition'|'rivalry'|'race',headline:string,detail:string};
+export function seasonNarrative(g:Game,id=g.teamId):Storyline[]{
+ const out:Storyline[]=[];
+ const mine=g.history.filter(m=>m.season===g.season&&(m.a===id||m.b===id)); // unshift로 쌓여 인덱스0이 최신
+ // 연승/연패: 최신 경기부터 같은 결과가 몇 번 이어지는지 센다.
+ if(mine.length){
+  const first=mine[0].winner===id;
+  let n=0;for(const m of mine){if((m.winner===id)===first)n++;else break;}
+  if(n>=3)out.push({kind:'streak',
+   headline:first?`${n}연승 중`:`${n}연패 중`,
+   detail:`최근 ${n}경기 ${first?'전승':'전패'} · 이번 시즌 전적 ${mine.filter(x=>x.winner===id).length}승 ${mine.filter(x=>x.winner!==id).length}패`});
+ }
+ // 라이벌전: 이번 시즌 2번 이상 맞붙은 상대 중 승패 차가 가장 작은(팽팽한) 상대.
+ const oppTally=new Map<string,{w:number,l:number}>();
+ for(const m of mine){const opp=m.a===id?m.b:m.a;const t=oppTally.get(opp)??{w:0,l:0};if(m.winner===id)t.w++;else t.l++;oppTally.set(opp,t);}
+ let rival:string|null=null,rivalGap=Infinity,rivalTotal=0;
+ for(const [opp,t] of oppTally){const total=t.w+t.l;if(total>=2){const gap=Math.abs(t.w-t.l);if(gap<rivalGap||(gap===rivalGap&&total>rivalTotal)){rival=opp;rivalGap=gap;rivalTotal=total;}}}
+ if(rival){const t=oppTally.get(rival)!;out.push({kind:'rivalry',headline:`${meta(rival).short}와 라이벌전`,detail:`이번 시즌 ${t.w}승 ${t.l}패로 맞붙는 중`});}
+ // 주전 경쟁: 같은 포지션 벤치 선수의 OVR이 현재 선발과 근접하거나 더 높다.
+ const line=starters(g,id);
+ for(const r of ROLES){
+  const cur=line.find(p=>p.role===r);if(!cur)continue;
+  const bench=roster(g,id).filter(p=>p.role===r&&p.id!==cur.id).sort((a,b)=>ovr(b)-ovr(a))[0];
+  if(bench&&ovr(bench)>=ovr(cur)-2)out.push({kind:'competition',headline:`${r} 주전 경쟁`,detail:`선발 ${cur.name}(OVR ${ovr(cur)}) · ${bench.name}(OVR ${ovr(bench)})이 근접`});
+ }
+ // 플레이오프 경쟁: 정규시즌 중, 6위 컷과 승수 차가 1 이하.
+ if(g.stage==='REGULAR'){
+  const table=standings(g),cutIdx=5,myIdx=table.findIndex(t=>t.id===id);
+  if(myIdx>=0&&table.length>cutIdx){
+   const cutWins=table[cutIdx].wins,gap=table[myIdx].wins-cutWins;
+   if(Math.abs(gap)<=1)out.push({kind:'race',
+    headline:myIdx<=cutIdx?'플레이오프 진출권 경쟁':'플레이오프 탈락 위기',
+    detail:`현재 ${myIdx+1}위(${table[myIdx].wins}승 ${table[myIdx].losses}패) · 6위 컷과 격차 ${Math.abs(gap)}승`});
+  }
+ }
+ return out;
+}
 export function newGame(teamId:string,seed:number):Game{
  if(!TEAM_META.some(t=>t.id===teamId))throw Error('팀을 선택해 주세요.');
  const rng=random(seed),players:Player[]=[],teams:Team[]=[];
@@ -717,7 +757,15 @@ function nextPO(g:Game){while(g.po.length<8){const n=g.po.length,[a,b]=poPair(g,
 function endSplit(g:Game){for(let week=0;week<3;week++)settleWeek(g);const rank=(id:string)=>{if(id===g.champion)return 1;const loser=(m:Match)=>m.a===m.winner?m.b:m.a;if(id===loser(g.po[7]))return 2;if(id===loser(g.po[6]))return 3;if(id===loser(g.po[5]))return 4;return g.poSeeds.includes(id)?(g.poSeeds.indexOf(id)<4?5:6):standings(g).findIndex(t=>t.id===id)+1;};for(const t of g.teams.filter(domestic)){const r=rank(t.id);t.fan=clamp(t.fan+(t.expected-r)*3);t.points+=11-(standings(g).findIndex(x=>x.id===t.id)+1)+([15,10,6,6,3,3][r-1]??0);pay(g,t,r===1?20000:r===2?10000:r<=4?5000:2000,'스플릿 상금');}g.hall.unshift({season:g.season,split:g.split,champion:g.champion!,rank:rank(g.teamId)});g.hall=g.hall.slice(0,100);g.phase='SPLIT_END';g.match=null;news(g,`${meta(g.champion!).name}, ${g.split==='SPRING'?'스프링':'서머'} 우승!`);}
 function regularNext(g:Game){const m=g.match!;for(const [a,b]of g.fixtures[g.round])if(![a,b].includes(g.teamId))autoMatch(g,{id:`${g.season}-${g.split}-${g.round}-${a}`,a,b,bestOf:3,scoreA:0,scoreB:0,sets:[],label:`${g.split} R${g.round+1}`});g.match=null;if(g.round%2===1)settleWeek(g);g.round++;if(g.round===18){g.stage='PLAYOFF';g.poSeeds=standings(g).slice(0,6).map(t=>t.id);g.po=[];news(g,'정규시즌이 종료되었습니다. 플레이오프 대진이 확정되었습니다.');nextPO(g);}else{g.phase=g.round%2===0?'PLAN':'PREP';if(g.phase==='PREP')loadMatch(g);}}
 function startSplit(g:Game){g.round=0;g.stage='REGULAR';g.phase='PLAN';g.match=null;g.po=[];g.champion=null;for(const t of g.teams){t.wins=0;t.losses=0;t.sw=0;t.sl=0;}for(const p of g.players){p.burn=clamp(p.burn-20);p.form=50;}g.fixtures=schedule(g.teams.filter(domestic).map(t=>t.id));}
-function nextYear(g:Game){g.season++;g.offWeek=0;g.phase='OFFSEASON';g.match=null;g.meta=metaChampions(g.seed,g.season);for(const t of g.teams)t.bailouts=0;const rng=random(hash(`${g.seed}-${g.season}-newyear`));for(const p of g.players){p.age++;const d=p.age>=32?1.5:p.age>=29?1:p.age>=26?.5:0;p.stats=p.stats.map((s,k)=>clamp(s-([0,4].includes(k)?d:p.age>=29?.3:0),1,99));p.pot=p.pot.map((s,k)=>clamp(s-([0,4].includes(k)?d:p.age>=29?.3:0),1,99));p.burn=0;p.form=50;if(p.nextSalary!==undefined){p.salary=p.nextSalary;p.until=p.nextUntil!;delete p.nextSalary;delete p.nextUntil;}if(p.until<g.season){if(p.teamId&&p.teamId!==g.teamId&&ROLES.some(r=>team(g,p.teamId!).lineup[r]===p.id)){p.until=g.season+1;}else p.teamId=null;}}
+function nextYear(g:Game){g.season++;g.offWeek=0;g.phase='OFFSEASON';g.match=null;
+ // F22: "게임 내 메타" 변경 시점·이유를 news에 남긴다 — 지금까지는 g.meta가 시즌마다 조용히
+ // 바뀌었을 뿐 어디에도 기록되지 않았다. 실데이터가 아니라 seed/season 기반 로테이션이라는 점은
+ // 화면 문구("시즌 X 메타 챔피언")와 GAME_RULES.md에 이미 명시돼 있다 — 여기선 "언제 바뀌었는지"만 더한다.
+ const oldMeta=new Set(g.meta);
+ g.meta=metaChampions(g.seed,g.season);
+ const newlyHot=g.meta.filter(id=>!oldMeta.has(id)).slice(0,3).map(champName).join(', ');
+ news(g,`시즌 ${g.season} 게임 내 메타 개편${newlyHot?` — ${newlyHot} 등 부각`:''}(실제 통계 연동 아님, 시즌마다 로테이션)`);
+ for(const t of g.teams)t.bailouts=0;const rng=random(hash(`${g.seed}-${g.season}-newyear`));for(const p of g.players){p.age++;const d=p.age>=32?1.5:p.age>=29?1:p.age>=26?.5:0;p.stats=p.stats.map((s,k)=>clamp(s-([0,4].includes(k)?d:p.age>=29?.3:0),1,99));p.pot=p.pot.map((s,k)=>clamp(s-([0,4].includes(k)?d:p.age>=29?.3:0),1,99));p.burn=0;p.form=50;if(p.nextSalary!==undefined){p.salary=p.nextSalary;p.until=p.nextUntil!;delete p.nextSalary;delete p.nextUntil;}if(p.until<g.season){if(p.teamId&&p.teamId!==g.teamId&&ROLES.some(r=>team(g,p.teamId!).lineup[r]===p.id)){p.until=g.season+1;}else p.teamId=null;}}
  g.players=g.players.filter(p=>!p.id.startsWith('emergency')&&!(p.teamId===null&&(p.age>=40||(p.age>=30&&rng()<.1))));
  for(let i=0;i<10;i++)g.players.push(makePlayer(100+g.season*10+i,ROLES[i%5],null,42+rng()*18,g.season,rng));for(const t of g.teams){t.points=0;if(t.id!==g.teamId){for(const r of ROLES){let options=roster(g,t.id).filter(p=>p.role===r);if(!options.length){let fa=g.players.filter(p=>!p.teamId&&p.role===r).sort((a,b)=>ovr(b)-ovr(a)).find(p=>payroll(g,t.id)+p.salary<=250000);if(!fa){fa=makePlayer(1000+g.season*100+g.teams.indexOf(t)*5+ROLES.indexOf(r),r,null,38,g.season,rng);g.players.push(fa);}fa.teamId=t.id;fa.until=g.season;options=[fa];}t.lineup[r]=options.sort((a,b)=>ovr(b)-ovr(a))[0].id;}}}
  const sorted=g.teams.filter(domestic).map(t=>({id:t.id,value:avg(roster(g,t.id).map(ovr))})).sort((a,b)=>b.value-a.value);g.teams.filter(domestic).forEach(t=>t.expected=sorted.findIndex(x=>x.id===t.id)+1);news(g,`시즌 ${g.season} 스토브리그 개막. 만료 계약과 포지션 공석을 확인하세요.`);}

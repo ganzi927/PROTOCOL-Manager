@@ -15,6 +15,11 @@ const before=formationOffset(track,10.449,'poke'),after=formationOffset(track,10
 assert.ok(Math.hypot(before[0]-after[0],before[1]-after[1])<.01);
 assert.deepEqual(formationOffset(track,16,'poke'),formationOffset(track,14,'poke'),'death keeps battle display location');
 const sup={...track,slot:4};assert.notDeepEqual(formationOffset(sup,14,'engage'),formationOffset(sup,14,'protect'));
+// F23: reducedMotion=true는 0.45초 완만한 전환 없이 목표 가중치로 즉시 스냅한다(모션 감소 접근성) —
+// 생략하면(기존 모든 호출부) 기존과 100% 동일해야 한다.
+assert.deepEqual(formationOffset(track,10.001,'poke'),formationOffset(track,10.001,'poke',false),'reducedMotion 생략은 명시적 false와 동일(기존 호출부 전부 무변화)');
+assert.notDeepEqual(formationOffset(track,10.001,'poke'),formationOffset(track,10.001,'poke',true),'reducedMotion=true는 완만한 전환 도중 다른(즉시 스냅된) 값을 낸다');
+assert.deepEqual(formationOffset(track,10.001,'poke',true),formationOffset(track,10.2,'poke',true),'reducedMotion=true는 도착 직후부터 이미 최종 가중치(스냅) — 시간에 따라 더 안 움직인다');
 assert.deepEqual(playbackDestination(-5,50),{time:0,ended:false,notifyEnd:false});
 assert.deepEqual(playbackDestination(60,50),{time:50,ended:true,notifyEnd:true});
 assert.deepEqual(playbackDestination(NaN,50),{time:0,ended:false,notifyEnd:false});
@@ -40,4 +45,4 @@ for(let seed=0;seed<50;seed++){
  }
  assert.deepEqual(stateAt(rd,0),start,'rewind fully resets visible state');
 }
-console.log('PASS broadcast: 50 matches, source KDA, no future death/arrival, completed events, rewind, smooth formations, seek boundaries');
+console.log('PASS broadcast: 50 matches, source KDA, no future death/arrival, completed events, rewind, smooth formations, reduced-motion instant snap, seek boundaries');

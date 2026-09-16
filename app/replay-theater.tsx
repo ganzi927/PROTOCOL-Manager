@@ -45,6 +45,17 @@ export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEn
  const pname=(side:'A'|'B',slot:number)=>(side==='A'?names.a:names.b)[slot]||'?';
 
  const tRef=useRef(0), playingRef=useRef(true), speedRef=useRef(1), lastRef=useRef(0), rafRef=useRef(0);
+ // F23: OS "모션 감소" 설정을 읽는다. 엔진 시계(tRef)·판정은 그대로 두고(프레임률 무관 원칙 유지),
+ // 화면에 실제로 그리는 빈도와 진형 전환의 완만한 보간만 줄인다 — formationOffset은 "표시 전용"이라
+ // (broadcast.ts 주석) 어느 쪽이든 결과에 영향 없다.
+ const reducedMotionRef=useRef(false), lastPaintWallRef=useRef(0);
+ useEffect(()=>{
+  const mq=window.matchMedia('(prefers-reduced-motion: reduce)');
+  reducedMotionRef.current=mq.matches;
+  const onChange=()=>{reducedMotionRef.current=mq.matches;};
+  mq.addEventListener('change',onChange);
+  return ()=>mq.removeEventListener('change',onChange);
+ },[]);
  const iconRefs=useRef<Record<string,SVGGElement|null>>({});
  const pathRefs=useRef<Record<string,SVGPolylineElement|null>>({});
  const actRefs=useRef<Record<string,SVGTextElement|null>>({});
@@ -67,7 +78,7 @@ export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEn
    const key=tr.side+tr.slot;
    const g=iconRefs.current[key];
    if(g){ const {pos,state}=posAt(tr,t);
-    const off=formationOffset(tr,t,styles[tr.side]);
+    const off=formationOffset(tr,t,styles[tr.side],reducedMotionRef.current);
     g.setAttribute('transform',`translate(${pos[0]+off[0]} ${pos[1]+off[1]})`); g.setAttribute('data-state',state); }
    if(ags){
     const a=ags.find(x=>x.side===tr.side&&x.slot===tr.slot)!;
@@ -89,7 +100,9 @@ export function ReplayTheater({set,teamA,teamB,mineIsA,names,onSelectPlayer,onEn
     tRef.current+=dt*speedRef.current;
     if(tRef.current>=rd.duration){tRef.current=rd.duration;lastTDisp.current=rd.duration;setTDisplay(rd.duration);playingRef.current=false;setPlaying(false);if(!endedRef.current){endedRef.current=true;onEnd?.();}}
    }
-   paint(tRef.current);
+   // 모션 감소 시 실제 DOM 페인트만 ~150ms 간격으로 줄인다(엔진 시계 tRef는 매 프레임 그대로 전진 —
+   // 배속·되감기·결과는 무영향, "덜 매끄럽게 보이지만 똑같이 진행"이 목표).
+   if(!reducedMotionRef.current||now-lastPaintWallRef.current>=150){lastPaintWallRef.current=now;paint(tRef.current);}
    rafRef.current=requestAnimationFrame(loop);
   };
   rafRef.current=requestAnimationFrame(loop);

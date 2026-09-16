@@ -170,6 +170,8 @@ button.draft-slot-name:hover{color:#c5f36b}
 .cp-info>small{font-size:10.5px;color:#8b97a1;margin-top:1px}
 /* champion portrait tiles (shared: draft grid, pick slots, meta panel, player dialog) */
 .champ-tile{position:relative;overflow:hidden}
+.player-monogram{position:relative;overflow:hidden}.player-monogram>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:1}
+.stat-disclaimer{display:block;margin:2px 0 6px;font-size:11px}
 .champ-tile>.ct-mono{position:relative;z-index:0}
 .champ-tile>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:1}
 .draft-wait{display:flex;flex-direction:column;align-items:center;gap:14px;padding:60px 20px;color:#8c99a4;font-size:13px}

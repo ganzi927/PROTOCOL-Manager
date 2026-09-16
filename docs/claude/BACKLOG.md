@@ -17,6 +17,7 @@
 | MATCH-SYS | P1 | IN_PROGRESS | ABIL-01·COMP-01·CAST-01을 하나의 경기 시스템으로 통합. 단위 1(D010)·2(D011)·3(D012)·4(D014)·5(D015)·5 점검(D017)·6 첫 슬라이스(D019: POG를 실제 사건 기여로, `pogReason`)·6 첫 슬라이스 점검·수정(D020: 이중가산·고정슬롯 동점) 완료. 다음: 단위 6 step 5(리캡을 근거 사건화) — **MINIMAP 완성 다음 우선순위로 미룸(사용자 지시)**. 아래 "MATCH-SYS" 절 참조 |
 | SAVE-01 | P1 | TODO | v1/v2와 서로 다른 v3 형태의 마이그레이션 검증 |
 | SAVE-02 | P2 | DONE | 저장 슬롯 초기화(사용자 요청, 2026-09-16). `설정 및 저장`에 "위험 구역" 패널 신설 — 현재 슬롯의 커리어·복원 지점을 DB에서 완전히 삭제하는 `DELETE /api/game?slot=N` 신규 엔드포인트(D033). 기존 명령/revision 경로를 재사용하지 않고 완전히 분리(행 자체가 없어지는 동작이라 낙관적 동시성 개념이 안 맞음). 가져오기 덮어쓰기와 달리 복원 지점도 함께 지워 되돌릴 수 없음을 확인 다이얼로그에 명시. 브라우저에서 실제 존재하던 슬롯을 초기화해 DB 행이 진짜 삭제됐음(`GET`이 `game:null` 반환)과 다른 슬롯은 무영향임을 직접 확인. |
+| REAL-01 | P2 | IN_PROGRESS | 실제 로스터·사진·능력치 연결(사용자 요청, 2026-09-16). **로스터 데이터 구조·사진 인프라는 완료**: `lib/rosters.ts`를 배열 위치 매핑에서 role 키 매핑(`RosterPlayer{handle,realName,role,status,sourceUrl,confirmedAt}`)으로 재구성(D034), Wikimedia Commons에서 실제 확인된 URL만으로 선수 사진 10명·팀 로고 4개 적용(재호스팅 없음, 렌더 시점 조회 — 저장 상태 무영향). **로스터 데이터 자체는 대부분 미검증 상태로 남음**: 이 환경에서 1차 출처(Liquipedia·LCK 공식) 접근이 전부 차단(403/429)돼 실제 확인을 못 했다 — 검색 요약으로 얻은 다수의 이적·개명 단서(T1/HLE/DK/KT/DRX/NS/KDF/BRO)는 검증 없이 코드에 반영하지 않고 `REAL_ROSTER_AUDIT.md` 검토 목록으로 남김. **실제 경기 기록 기반 능력치는 설계만 완료, 미적용**: `lib/players/rating-model.ts`(원자료/전처리/게임평가 3계층)를 신설했지만 실제 경기 원자료가 0건이라 `Player`/`Game`에 아직 연결하지 않음 — 화면엔 "게임 내 평가 — 공식 능력치 아님" 라벨만 추가. `tests/real-roster.test.mjs` 신설(6섹션), tsc/build/`management.test.mjs`/`engine.test.mjs` PASS, 브라우저에서 새 T1 커리어의 선발 5인 실명·사진·라벨 전부 확인. 아래 "REAL-01" 절 참조 |
 | DRAFT-01 | P2 | TODO | 선택/스왑 후 선수별 정확한 보정 표시 |
 | DOC-01 | P2 | TODO | 기존 GDD·README를 현행140종/Lv4/스왑 기준으로 통합 |
 | UI-01 | P2 | TODO | 모바일 밴픽 가독성과 작은 텍스트 개선 |
@@ -398,3 +399,27 @@
 - 표본이 거의 항상 적다(이 게임 자체가 싱글플레이 커리어라 총 경기 수가 제한적) — 흔한 챔피언이 아니면 시즌 여러 개를 지나야 `MIN_SAMPLE`을 넘긴다. 이는 버그가 아니라 이 게임의 실제 데이터 규모를 정직하게 반영한 결과다.
 
 **F01~F27(Development Orders 전체)이 이번 세션으로 전부 한 번씩 다뤄졌다.** 완료로 표시된 항목도 각자의 "알려진 제한" 절에 남은 조각이 있으니, 다음 세션은 재구현이 아니라 그 잔여 조각(F25 첫 경기 튜토리얼 등)이나 F15급 대규모 밸런스 검증부터 사용자와 확인할 것.
+
+## REAL-01 — 실제 로스터·사진·능력치 연결 (2026-09-16) — 부분 완료, 정직하게 절반은 미착수
+
+근거: 사용자 직접 요청(Development Orders 밖 항목). 설계 결정은 `DECISIONS.md`의 **D034** 참조. 산출물: `docs/claude/REAL_ROSTER_AUDIT.md`(감사)·`docs/claude/PLAYER_RATING_MODEL.md`(능력치 모델 설계)·`docs/claude/DATA_UPDATE_GUIDE.md`(갱신 절차).
+
+### 완료 — 데이터 구조·사진 인프라
+`lib/rosters.ts`를 감사한 결과 LCK 10팀·국제 13팀 전체에 이미 실명 매핑이 있었지만 배열 위치 기반(role 필드 없음)이라 "배열 순서로 선수를 연결하지 마라"는 사용자 경고에 정확히 걸리는 위험한 구조였다. `RosterPlayer{handle,realName,role,status,photo?,note?}`/`TeamRosterEntry{players,sourceUrl?,confirmedAt?}`로 재구성해 `lib/game.ts`의 두 소비 지점(국내 `newGame`, 해외 `upgradeGame` 백필)을 role 키 매칭으로 바꿨다. 선수 사진은 원래 없었던 걸 신설 — Liquipedia API가 이 환경에서 전부 429로 막혀 Wikimedia Commons의 `pageimages` API로 우회, 실제 API 응답에서 확인된 URL만(LCK 선발 50명 중 10명, 팀 로고 10개 중 4개) 적용했다. `app/manager.tsx`에 `PlayerFace` 컴포넌트 신설(기존 `Emblem`/`ChampTile`의 "모노그램 먼저 깔고 이미지 `onError`로 숨김" 기법 재사용) — 사진 없는 선수는 조용히 이니셜 아바타로 폴백(깨진 이미지 없음). 사진은 `Player`/`Game`에 저장하지 않고 렌더 시점에 핸들로 조회 — 저장 마이그레이션 위험이 구조적으로 없다.
+
+### 미완료(정직하게 남김) — 로스터 정확성 검증
+사용자가 요구한 수준("① 대회·리그 공식 등록 자료를 실제로 열어 확인")의 1차 출처 검증을 **이 세션에서는 수행하지 못했다** — WebFetch가 liquipedia.net/lol.fandom.com/lck.gg 등 주요 출처 전부에서 403/429/402로 차단됐다(서브에이전트 2개, 총 27회 시도, 전부 실패). 검색 엔진 요약(WebSearch)으로 다수의 실제 이적·개명 단서를 얻었지만(T1 Gumayusi→HLE, HLE Kanavi 합류, DK 로스터 개편, DRX→Kiwoom DRX 개명, KDF→DN SOOPers 개명, BRO→HANJIN BRION 개명 등), "검증 완료로 표시하지 마라"는 사용자 지시를 지키기 위해 **코드에는 반영하지 않았다** — `REAL_ROSTER_AUDIT.md` §2·§6에 전부 "미검증" 표와 검토 목록으로만 남겼다. KT Rolster ADC/SUP, "Taeyoon" 소속, Gen.G Duro 실명은 서로 다른 검색 결과가 직접 충돌해 사람이 원본을 열어 확인해야 한다.
+
+### 미완료(정직하게 남김) — 실제 경기 기록 기반 능력치
+`lib/players/rating-model.ts`에 원자료(`RawMatchObservation`)→전처리 지표(`ProcessedMetric`)→게임 평가(`GameRating`)의 3계층 구조와 신뢰도·수축(shrinkage) 로직을 설계했지만, **실제 경기별 통계를 단 1건도 수집하지 못한 상태**(같은 WebFetch 차단)라 `Player`/`Game`에 연결하지 않았다. 표본 없이 "그럴듯한" 숫자를 채워 넣는 건 사용자가 명시적으로 금지한 행위라 하지 않았다 — 대신 화면 라벨을 "게임 내 평가 — 공식 능력치 아님, 현재는 팀 전력 기반 설계값입니다"로 바꿔 지금 상태를 정직하게 밝혔다. `PLAYER_RATING_MODEL.md`에 실제 데이터를 연결할 때의 절차(출처 확보→표본 확보→역할별 기준선 재설정→대표 선수 검증→전체 적용)를 구체적으로 적어 뒀다.
+
+### 검증
+`tests/real-roster.test.mjs` 신설(6섹션 — role 기반 매핑이 배열 순서가 아니라 실제 role로 정확한지, 벤치 슬롯은 합성 이름 유지, 국제팀도 같은 스키마로 매칭, 사진 조회는 순수 함수이며 Player 객체에 저장 안 됨, 팀 로고·선수 사진 URL 형태 검증, 기존 커리어는 `upgradeGame` 왕복 후에도 이름이 그대로), 첫 실행 PASS. tsc·`npm run build` PASS. eslint: 새 파일(`rosters.ts`/`rating-model.ts`) 0개 이슈, `game.ts` 델타 0, `manager.tsx`는 `@next/next/no-img-element` 경고 1개 추가(기존 `Emblem`/`ChampTile`과 동일 근거로 이미 2건 허용돼 있던 규칙 — 새 카테고리 아님). `management.test.mjs`·`engine.test.mjs`(3커리어·1106+ 세트, `newGame`/`upgradeGame` 핵심 경로 변경이라 재확인) PASS. **브라우저 실측**: 새 T1 커리어를 실제로 생성 → 선발 5인(Doran/Oner/Faker/Gumayusi/Keria) 전원이 role에 맞는 실명·사진으로 렌더링됨을 DOM으로 확인 → Faker 상세 다이얼로그에서 사진·"게임 내 평가" 라벨 확인 → 사진 없는 벤치 선수("Rook", 합성 이름)를 열어 `<img>`가 아예 렌더링되지 않고 이니셜 모노그램만 깨끗이 표시됨을 확인(깨진 이미지 없음) → 팀 로고 4개(Gen.G/HLE/Dplus KIA/DRX)가 실제 이미지로 렌더링됨을 확인. 콘솔 에러 없음.
+
+### 알려진 제한 / 다음 단계
+- **로스터 정확성 자체가 미검증** — 이번에 고친 건 "데이터를 연결하는 방식"(role 매핑, 출처 필드)이지 "데이터 내용"이 아니다. `REAL_ROSTER_AUDIT.md` §6의 검토 목록(6항목)은 사람이 직접 1차 출처를 열어 확인해야 풀린다.
+- **벤치·아카데미(2군) 선수 실명 전혀 없음** — 이번 검색으로도 확인되지 않았다.
+- **사진 커버리지 20%(선수)·40%(팀 로고)** — Wikimedia Commons에 개인 문서가 있는 유명 선수만. 나머지는 이니셜 아바타가 기본이며 이건 예외가 아니라 이 데이터 소스 환경의 정상 상태.
+- **실제 경기 기반 능력치 0% 적용** — 설계만 완료. `PLAYER_RATING_MODEL.md` §8~9가 다음에 할 일을 구체적으로 적어 뒀다.
+- **국제대회 팀(LPL/LEC/LCS/PCS) 검증은 아예 시작 안 함** — 사용자 지시대로 "LCK 먼저" 순서를 지켰다.
+- **DRX/Kwangdong Freecs/BRION의 개명 단서**(검색 요약에서만 나옴, 미검증)는 `TEAM_META`의 실제 `name`/`short`를 바꾸지 않은 채로 뒀다 — 검증 전에 표시 이름을 바꾸면 그 자체가 미확인 정보를 확정처럼 보여주는 것이라 판단.

@@ -1,16 +1,78 @@
 // Real-world identities for the Classic league, mapped onto the existing team ids so
-// saved careers stay compatible. LCK 2026 + international rosters are a best-effort
-// approximation as of early 2026 — bench and lower-table lineups are easy to correct here.
-// Player handles/names are used for flavour only; this is not licensed content.
+// saved careers stay compatible. Player handles/names are used for flavour only; this is
+// not licensed content, and no in-engine stat is derived from real match performance yet
+// (see docs/claude/PLAYER_RATING_MODEL.md).
+//
+// Data baseline: 2026-09-16. See docs/claude/REAL_ROSTER_AUDIT.md for the full audit —
+// in this environment, direct access to primary sources (Liquipedia, the LCK official
+// site, team fandom wikis) was blocked (WebFetch returned 403/429/402 on every attempt).
+// Only indirect search-engine summaries were reachable, several of which directly
+// contradict each other (KT Rolster's ADC/SUP, "Taeyoon" appearing on two different
+// teams). Rather than bake in unverified — and in places self-contradictory — leads as
+// if they were confirmed, every roster entry below keeps the ORIGINAL pre-audit data and
+// is explicitly tagged `confirmedAt: undefined` (= not verified against a primary source
+// this session). `docs/claude/REAL_ROSTER_AUDIT.md` §6 lists what a human needs to
+// resolve by opening a primary source directly; `docs/claude/DATA_UPDATE_GUIDE.md`
+// explains how to fold a confirmed correction back into this file.
+
+export type Role = 'TOP'|'JGL'|'MID'|'ADC'|'SUP';
+// 'starter' = confirmed (or, right now, assumed-from-prior-data) starting five.
+// 'bench'/'academy' = registered but not the primary lineup. 'inactive' = registered,
+// not currently playing (injury, military service, etc.). This is deliberately NOT the
+// same thing as "appears in this file" — see REAL_ROSTER_AUDIT.md §0 for why none of the
+// entries below have graduated past 'starter'-as-inherited-guess yet.
+export type RosterStatus = 'starter'|'bench'|'academy'|'inactive';
+
+export type RosterPlayer = {
+ handle:string; realName?:string; role:Role; status:RosterStatus;
+ photo?:string; // direct hotlink URL only (e.g. a Liquipedia file URL) — never rehosted, never stored in Game/Player state.
+ note?:string;  // free-text caveat, e.g. a name-spelling conflict found during audit.
+};
+
+export type TeamRosterEntry = {
+ players:RosterPlayer[];
+ sourceUrl?:string;   // team-level source page, only set once someone has actually opened and read it.
+ confirmedAt?:string; // ISO date that source was actually read. undefined = unverified.
+ note?:string;
+};
 
 export type TeamMeta = {id:string;name:string;short:string;color:string;base:number;desc:string;city:string;difficulty:string;logo?:string};
 
-// Optional per-team logo URL (any reachable image). Left mostly empty — reliable free
-// hosting for all 23 org logos isn't available; drop a URL here and the emblem uses it,
-// otherwise it falls back to the brand-coloured short code.
+// Optional per-team logo URL (any reachable image). Liquipedia (the original intended
+// source, matching the T1 entry below) returned HTTP 429 on every attempt this session —
+// see REAL_ROSTER_AUDIT.md §7. The other four entries came from Wikimedia Commons via
+// Wikipedia's pageimages API instead (explicit machine-readable license tags, arguably
+// safer than Liquipedia's fair-use editorial images) — confirmed working URLs only, none
+// guessed. Left empty for the remaining teams; the emblem falls back to the brand-coloured
+// short code (Emblem component in app/manager.tsx) rather than a broken image.
 export const TEAM_LOGO: Record<string,string> = {
- nva: 'https://liquipedia.net/leagueoflegends/Special:FilePath/T1logo_std.png',
+ nva: 'https://liquipedia.net/leagueoflegends/Special:FilePath/T1logo_std.png', // untested this session (Liquipedia blocked) — spot-check before relying on it.
+ crn: 'https://thumb.wikimedia.org/wikipedia/commons/thumb/7/77/Gen.G_Logo.svg/330px-Gen.G_Logo.svg.png',
+ blz: 'https://thumb.wikimedia.org/wikipedia/commons/thumb/9/99/Hanwha_Life_Esports_logo.svg/330px-Hanwha_Life_Esports_logo.svg.png',
+ pnt: 'https://thumb.wikimedia.org/wikipedia/commons/thumb/2/20/DPlus_KIA_Logo.svg/330px-DPlus_KIA_Logo.svg.png',
+ orl: 'https://thumb.wikimedia.org/wikipedia/commons/thumb/3/34/DRX_logo_2023.png/330px-DRX_logo_2023.png', // filename says "2023" — may be a stale mark, not confirmed current.
 };
+
+// Optional per-player photo URL (same non-rehosting policy as TEAM_LOGO/champImageUrl).
+// Resolved by handle at render time — never stored on a Player, so filling this in later
+// never touches existing saves. Only 10 of the 50 LCK starters have an individual
+// Wikipedia article with a page image (checked via the pageimages API, not guessed) —
+// see REAL_ROSTER_AUDIT.md §7 for the full coverage list. Everyone else falls back to the
+// existing initial-monogram avatar (app/manager.tsx's .player-monogram), which is the
+// intended default, not a degraded edge case.
+export const PLAYER_PHOTO: Record<string,string> = {
+ Faker: 'https://thumb.wikimedia.org/wikipedia/commons/thumb/1/1a/Faker_2020_interview.jpg/330px-Faker_2020_interview.jpg',
+ Gumayusi: 'https://upload.wikimedia.org/wikipedia/commons/b/b0/Gumayusi_at_2023_LCK_Awards.jpg',
+ Chovy: 'https://thumb.wikimedia.org/wikipedia/commons/thumb/5/50/Chovy_MSI_2025.jpg/330px-Chovy_MSI_2025.jpg',
+ Doran: 'https://thumb.wikimedia.org/wikipedia/commons/thumb/f/fd/Doran_2025.jpg/330px-Doran_2025.jpg',
+ Keria: 'https://thumb.wikimedia.org/wikipedia/commons/thumb/6/6e/Keria%2C_2023_worlds_winning_team_interview.jpg/330px-Keria%2C_2023_worlds_winning_team_interview.jpg',
+ Oner: 'https://thumb.wikimedia.org/wikipedia/commons/thumb/b/b3/Oner_at_Worlds_2025.jpg/330px-Oner_at_Worlds_2025.jpg',
+ Peanut: 'https://thumb.wikimedia.org/wikipedia/commons/thumb/5/56/Peanut_2025.jpg/330px-Peanut_2025.jpg',
+ Ruler: 'https://thumb.wikimedia.org/wikipedia/commons/thumb/b/bc/Ruler_interview_2022.jpg/330px-Ruler_interview_2022.jpg',
+ Zeus: 'https://thumb.wikimedia.org/wikipedia/commons/thumb/e/e3/Zeus_2024_post-match_interview.jpg/330px-Zeus_2024_post-match_interview.jpg',
+ Bdd: 'https://thumb.wikimedia.org/wikipedia/commons/thumb/1/1c/BDD_interview_2021.jpg/330px-BDD_interview_2021.jpg',
+};
+export const playerPhotoUrl = (handle:string):string|undefined => PLAYER_PHOTO[handle];
 
 export const TEAM_META: TeamMeta[] = [
  {id:'nva',name:'T1',short:'T1',color:'#e4022e',base:82,desc:'월즈 3연패의 왕조, 페이커의 팀',city:'SEOUL',difficulty:'쉬움'},
@@ -41,33 +103,42 @@ export const FOREIGN_META: TeamMeta[] = [
  {id:'sao',name:'PSG Talon',short:'PSG',color:'#c99a3a',base:65,city:'TAIPEI',desc:'메이플·베티의 태평양 대표',difficulty:'국제'},
 ];
 
-// [handle, 실명] in ROLES order: TOP, JGL, MID, ADC, SUP
-type Line = [string,string];
-export const LCK_ROSTER: Record<string,Line[]> = {
- nva:[['Doran','최현준'],['Oner','문현준'],['Faker','이상혁'],['Gumayusi','이민형'],['Keria','류민석']],
- crn:[['Kiin','김기인'],['Canyon','김건부'],['Chovy','정지훈'],['Ruler','박재혁'],['Duro','주민규']],
- blz:[['Zeus','최우제'],['Peanut','한왕호'],['Zeka','김건우'],['Viper','박도현'],['Delight','유환중']],
- pnt:[['Siwoo','송시우'],['Lucid','최용혁'],['ShowMaker','허수'],['Aiming','김하람'],['BeryL','조건희']],
- vtx:[['PerfecT','이승민'],['Cuzz','문우찬'],['Bdd','곽보성'],['deokdam','서대길'],['Way','조용인']],
- orl:[['Rich','이재원'],['Juhan','이주한'],['SeTab','박세훈'],['Teddy','박진성'],['Andil','문관빈']],
- flx:[['DnDn','박근우'],['Sylvie','이승복'],['Fisher','김정후'],['Jiwoo','한지원'],['Peter','정윤수']],
- wlv:[['DuDu','이동주'],['Pyosik','홍창현'],['BuLLDoG','이태영'],['Envyy','이명준'],['Kellin','김형규']],
- ark:[['Clear','송현민'],['Raptor','권지훈'],['VicLa','가을'],['Diable','이창주'],['Kael','김진홍']],
- rse:[['Morgan','박기태'],['Gideon','강영준'],['Karis','김홍조'],['Hena','박증환'],['Effort','이상호']],
+const starter=(handle:string,realName:string,role:Role,note?:string):RosterPlayer=>({handle,realName,role,status:'starter',note});
+
+// LCK. Every team here is `confirmedAt: undefined` — see file header. REAL_ROSTER_AUDIT.md
+// §2 has search-summary leads (transfers, possible team renames) for several of these
+// teams that are NOT reflected here yet because they could not be verified against a
+// primary source this session; folding a lead in without verification would mean storing
+// an unconfirmed claim as if it were fact, which the roster audit explicitly avoids.
+export const LCK_ROSTER: Record<string, TeamRosterEntry> = {
+ nva:{players:[starter('Doran','최현준','TOP'),starter('Oner','문현준','JGL'),starter('Faker','이상혁','MID'),starter('Gumayusi','이민형','ADC'),starter('Keria','류민석','SUP')]},
+ crn:{players:[starter('Kiin','김기인','TOP'),starter('Canyon','김건부','JGL'),starter('Chovy','정지훈','MID'),starter('Ruler','박재혁','ADC'),starter('Duro','주민규','SUP','감사 중 검색 요약은 실명을 "김민규"로 표기 — 코드값 "주민규"와 충돌, 미해결(REAL_ROSTER_AUDIT.md §6)')]},
+ blz:{players:[starter('Zeus','최우제','TOP'),starter('Peanut','한왕호','JGL'),starter('Zeka','김건우','MID'),starter('Viper','박도현','ADC'),starter('Delight','유환중','SUP')]},
+ pnt:{players:[starter('Siwoo','송시우','TOP'),starter('Lucid','최용혁','JGL'),starter('ShowMaker','허수','MID'),starter('Aiming','김하람','ADC'),starter('BeryL','조건희','SUP')]},
+ vtx:{players:[starter('PerfecT','이승민','TOP'),starter('Cuzz','문우찬','JGL'),starter('Bdd','곽보성','MID'),starter('deokdam','서대길','ADC'),starter('Way','조용인','SUP')]},
+ orl:{players:[starter('Rich','이재원','TOP'),starter('Juhan','이주한','JGL'),starter('SeTab','박세훈','MID'),starter('Teddy','박진성','ADC'),starter('Andil','문관빈','SUP')]},
+ flx:{players:[starter('DnDn','박근우','TOP'),starter('Sylvie','이승복','JGL'),starter('Fisher','김정후','MID'),starter('Jiwoo','한지원','ADC'),starter('Peter','정윤수','SUP')]},
+ wlv:{players:[starter('DuDu','이동주','TOP'),starter('Pyosik','홍창현','JGL'),starter('BuLLDoG','이태영','MID'),starter('Envyy','이명준','ADC'),starter('Kellin','김형규','SUP')]},
+ ark:{players:[starter('Clear','송현민','TOP'),starter('Raptor','권지훈','JGL'),starter('VicLa','가을','MID'),starter('Diable','이창주','ADC'),starter('Kael','김진홍','SUP')]},
+ rse:{players:[starter('Morgan','박기태','TOP'),starter('Gideon','강영준','JGL'),starter('Karis','김홍조','MID'),starter('Hena','박증환','ADC'),starter('Effort','이상호','SUP')]},
 };
 
-export const INTL_ROSTER: Record<string,Line[]> = {
- drg:[['Bin','陈泽彬'],['Xun','彭立勋'],['Knight','卓定'],['Elk','赵嘉豪'],['ON','罗文君']],
- jdx:[['369','白家浩'],['Kanavi','서진혁'],['Yagao','曾奇'],['Peyz','김수환'],['Missing','楼益豪']],
- lnx:[['Wayward','郑周军'],['Tian','高天亮'],['Rookie','宋义进'],['JackeyLove','喻文波'],['Meiko','田野']],
- vxg:[['TheShy','강승록'],['Karsa','洪浩轩'],['Xiaohu','李元浩'],['Light','王光宇'],['Crisp','刘青松']],
- kng:[['Flandre','李玄君'],['Tarzan','이승용'],['Shanks','王思佳'],['Hope','王杰'],['Ycx','응차오']],
- par:[['Zika','陈梓宾'],['Jiejie','赵立杰'],['Cryin','王皓'],['GALA','陈炜'],['Wink','黄天旭']],
- ldn:[['BrokenBlade','Sergen Çelik'],['SkewMond','Isaac Portmann'],['Caps','Rasmus Winther'],['Hans Sama','Steven Liv'],['Labrov','Labros Papoutsakis']],
- nyc:[['Oscarinin','Óscar Muñoz'],['Razork','Iván Martín'],['Humanoid','Marek Brázda'],['Upset','Elias Lipp'],['Mikyx','Mihael Mehle']],
- lax:[['Myrwn','Alejandro Villar'],['Elyoya','Javier Prades'],['Jojopyun','Joseph Pyun'],['Carzzy','Matyáš Orság'],['Alvaro','Álvaro Fernández']],
- tpe:[['Canna','김창동'],['Yike','Mathias Ochoa'],['Saken','Lucas Fensterseifer'],['Caliste','Sebastian Kabza'],['Targamas','Jérôme Stiévenart']],
- tko:[['Impact','정언영'],['UmTi','엄성현'],['APA','Eain Stearns'],['Yeon','Sean Sung'],['CoreJJ','조용인']],
- hcm:[['Bwipo','Gabriël Rau'],['Inspired','Kacper Słoma'],['Quad','송수형'],['Massu','Fahad Abdulmalek'],['Busio','Alan Cwalina']],
- sao:[['Azhi','沈廷宇'],['JunJia','蔡厉纮'],['Maple','黄义闵'],['Betty','陆彦伟'],['Woody','邱柏翔']],
+// International teams — same TeamRosterEntry shape as LCK_ROSTER so the two can share
+// consuming code, per the instruction to build a common structure and expand into this
+// after LCK is applied/verified. Contents are unchanged from before this audit and are
+// equally unverified this session (out of scope this round — LCK first).
+export const INTL_ROSTER: Record<string, TeamRosterEntry> = {
+ drg:{players:[starter('Bin','陈泽彬','TOP'),starter('Xun','彭立勋','JGL'),starter('Knight','卓定','MID'),starter('Elk','赵嘉豪','ADC'),starter('ON','罗文君','SUP')]},
+ jdx:{players:[starter('369','白家浩','TOP'),starter('Kanavi','서진혁','JGL'),starter('Yagao','曾奇','MID'),starter('Peyz','김수환','ADC'),starter('Missing','楼益豪','SUP')]},
+ lnx:{players:[starter('Wayward','郑周军','TOP'),starter('Tian','高天亮','JGL'),starter('Rookie','宋义进','MID'),starter('JackeyLove','喻文波','ADC'),starter('Meiko','田野','SUP')]},
+ vxg:{players:[starter('TheShy','강승록','TOP'),starter('Karsa','洪浩轩','JGL'),starter('Xiaohu','李元浩','MID'),starter('Light','王光宇','ADC'),starter('Crisp','刘青松','SUP')]},
+ kng:{players:[starter('Flandre','李玄君','TOP'),starter('Tarzan','이승용','JGL'),starter('Shanks','王思佳','MID'),starter('Hope','王杰','ADC'),starter('Ycx','응차오','SUP')]},
+ par:{players:[starter('Zika','陈梓宾','TOP'),starter('Jiejie','赵立杰','JGL'),starter('Cryin','王皓','MID'),starter('GALA','陈炜','ADC'),starter('Wink','黄天旭','SUP')]},
+ ldn:{players:[starter('BrokenBlade','Sergen Çelik','TOP'),starter('SkewMond','Isaac Portmann','JGL'),starter('Caps','Rasmus Winther','MID'),starter('Hans Sama','Steven Liv','ADC'),starter('Labrov','Labros Papoutsakis','SUP')]},
+ nyc:{players:[starter('Oscarinin','Óscar Muñoz','TOP'),starter('Razork','Iván Martín','JGL'),starter('Humanoid','Marek Brázda','MID'),starter('Upset','Elias Lipp','ADC'),starter('Mikyx','Mihael Mehle','SUP')]},
+ lax:{players:[starter('Myrwn','Alejandro Villar','TOP'),starter('Elyoya','Javier Prades','JGL'),starter('Jojopyun','Joseph Pyun','MID'),starter('Carzzy','Matyáš Orság','ADC'),starter('Alvaro','Álvaro Fernández','SUP')]},
+ tpe:{players:[starter('Canna','김창동','TOP'),starter('Yike','Mathias Ochoa','JGL'),starter('Saken','Lucas Fensterseifer','MID'),starter('Caliste','Sebastian Kabza','ADC'),starter('Targamas','Jérôme Stiévenart','SUP')]},
+ tko:{players:[starter('Impact','정언영','TOP'),starter('UmTi','엄성현','JGL'),starter('APA','Eain Stearns','MID'),starter('Yeon','Sean Sung','ADC'),starter('CoreJJ','조용인','SUP')]},
+ hcm:{players:[starter('Bwipo','Gabriël Rau','TOP'),starter('Inspired','Kacper Słoma','JGL'),starter('Quad','송수형','MID'),starter('Massu','Fahad Abdulmalek','ADC'),starter('Busio','Alan Cwalina','SUP')]},
+ sao:{players:[starter('Azhi','沈廷宇','TOP'),starter('JunJia','蔡厉纮','JGL'),starter('Maple','黄义闵','MID'),starter('Betty','陆彦伟','ADC'),starter('Woody','邱柏翔','SUP')]},
 };

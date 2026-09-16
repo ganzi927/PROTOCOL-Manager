@@ -5,11 +5,11 @@ export {temperamentOf, temperamentLabelOf, temperamentShortLabelOf, TEMPERAMENT_
 import {CHALLENGES, startChallenge, recordObservation, successRate as challengeSuccessRate, type ChallengeId, type ChallengeProgress} from './players/challenges.ts';
 export {CHALLENGES, startChallenge, recordObservation, challengeSuccessRate, type ChallengeId, type ChallengeProgress};
 import {CHAMPIONS, TAG_LABEL, champImageUrl, type Champion, type ChampTag, type ChampType} from './champions.ts';
-import {TEAM_META, FOREIGN_META, TEAM_LOGO, LCK_ROSTER, INTL_ROSTER} from './rosters.ts';
+import {TEAM_META, FOREIGN_META, TEAM_LOGO, LCK_ROSTER, INTL_ROSTER, playerPhotoUrl} from './rosters.ts';
 import {draftEffects,compositionPlan,draftFitScore} from './balance/composition.ts';
 import {narrateEvent, newNarrMemory, type Beat, type Tier} from './simulation/narration.ts';
 import {newMatchState, resolveGank, resolveBotLane, resolveObjective, resolveTeamfight, resolveSiege, type CombatEvent, type Side, type DirectorBonus} from './simulation/combat.ts';
-export {CHAMPIONS, TAG_LABEL, champImageUrl, TEAM_META, FOREIGN_META, TEAM_LOGO};
+export {CHAMPIONS, TAG_LABEL, champImageUrl, TEAM_META, FOREIGN_META, TEAM_LOGO, playerPhotoUrl};
 export type {Champion, ChampTag, ChampType};
 export const ROLES = ['TOP','JGL','MID','ADC','SUP'] as const;
 export type Role = typeof ROLES[number];
@@ -197,7 +197,16 @@ export function seasonNarrative(g:Game,id=g.teamId):Storyline[]{
 export function newGame(teamId:string,seed:number):Game{
  if(!TEAM_META.some(t=>t.id===teamId))throw Error('팀을 선택해 주세요.');
  const rng=random(seed),players:Player[]=[],teams:Team[]=[];
- TEAM_META.forEach((m,i)=>{const lineup={} as Record<Role,string>;for(let j=0;j<7;j++){const p=makePlayer(i*7+j,ROLES[j%5],m.id,m.base-(j>=5?17:0),1,rng);const rl=j<5?LCK_ROSTER[m.id]?.[j]:undefined;if(rl){p.name=rl[0];p.realName=rl[1];}players.push(p);if(j<5)lineup[p.role]=p.id;}const total=players.filter(p=>p.teamId===m.id).reduce((s,p)=>s+p.salary,0);if(total>240000)players.filter(p=>p.teamId===m.id).forEach(p=>p.salary=Math.floor(p.salary*240000/total));const t:Team={id:m.id,lineup,familiarity:{},cash:100000,fan:50,expected:1,tactic:i%3===0?'early':i%3===1?'late':'objective',focus:'MID',wins:0,losses:0,sw:0,sl:0,points:0};t.familiarity[key(t)]=40;teams.push(t);});
+ TEAM_META.forEach((m,i)=>{const lineup={} as Record<Role,string>;for(let j=0;j<7;j++){const role=ROLES[j%5];const p=makePlayer(i*7+j,role,m.id,m.base-(j>=5?17:0),1,rng);
+  // Real-name overlay only — display-only fields, never the source of engine stats/salary/mastery
+  // (see docs/claude/PLAYER_RATING_MODEL.md). j<5 = the starting five looks for a 'starter' entry;
+  // j>=5 (bench slots, always TOP/JGL role per the loop above) looks for a confirmed bench/academy
+  // entry at that same role. lib/rosters.ts currently has none tagged that way, so this is a no-op
+  // today and simply keeps the synthetic placeholder name — filling in a confirmed bench player
+  // later needs no engine change, just a new RosterPlayer entry.
+  const rl=LCK_ROSTER[m.id]?.players.find(rp=>rp.role===role&&(j<5?rp.status==='starter':rp.status==='bench'||rp.status==='academy'));
+  if(rl){p.name=rl.handle;p.realName=rl.realName??p.realName;}
+  players.push(p);if(j<5)lineup[p.role]=p.id;}const total=players.filter(p=>p.teamId===m.id).reduce((s,p)=>s+p.salary,0);if(total>240000)players.filter(p=>p.teamId===m.id).forEach(p=>p.salary=Math.floor(p.salary*240000/total));const t:Team={id:m.id,lineup,familiarity:{},cash:100000,fan:50,expected:1,tactic:i%3===0?'early':i%3===1?'late':'objective',focus:'MID',wins:0,losses:0,sw:0,sl:0,points:0};t.familiarity[key(t)]=40;teams.push(t);});
  const ranked=[...TEAM_META].sort((a,b)=>b.base-a.base);teams.forEach(t=>t.expected=ranked.findIndex(m=>m.id===t.id)+1);
  for(let i=0;i<15;i++)players.push(makePlayer(70+i,ROLES[i%5],null,48+rng()*18,1,rng));
  return {version:1,seed,season:1,split:'SPRING',round:0,stage:'REGULAR',phase:'PLAN',teamId,players,teams,fixtures:schedule(teams.filter(domestic).map(t=>t.id)),match:null,history:[],news:['감독으로 부임했습니다. 이번 시즌의 첫 주간 훈련을 선택하세요.','Classic 리그: 정규시즌 18경기 · Bo3 · 상위 6팀 플레이오프'],hall:[],po:[],poSeeds:[],champion:null,trained:false,offWeek:0,ledger:[],planNotice:[],meta:metaChampions(seed,1)};
@@ -874,7 +883,7 @@ export function upgradeGame(g:Game):Game{
  g.meta??=metaChampions(g.seed,g.season);
  for(const [i,m] of FOREIGN_META.entries())if(!g.teams.some(t=>t.id===m.id)){
   const rng=random(hash(`${g.seed}-foreign-${m.id}`)),lineup={} as Record<Role,string>;
-  for(let r=0;r<5;r++){const p=makePlayer(10000+i*5+r,ROLES[r],m.id,m.base,g.season,rng);const rl=INTL_ROSTER[m.id]?.[r];p.name=rl?rl[0]:handles[(i*5+r+7)%handles.length]+'.'+m.short;p.realName=rl?rl[1]:m.city+' · '+ROLES[r];g.players.push(p);lineup[p.role]=p.id;}
+  for(let r=0;r<5;r++){const role=ROLES[r];const p=makePlayer(10000+i*5+r,role,m.id,m.base,g.season,rng);const rl=INTL_ROSTER[m.id]?.players.find(rp=>rp.role===role&&rp.status==='starter');p.name=rl?rl.handle:handles[(i*5+r+7)%handles.length]+'.'+m.short;p.realName=rl?(rl.realName??m.city+' · '+role):m.city+' · '+role;g.players.push(p);lineup[p.role]=p.id;}
   const ps=g.players.filter(p=>p.teamId===m.id),total=ps.reduce((a,p)=>a+p.salary,0);if(total>240000)ps.forEach(p=>p.salary=Math.floor(p.salary*240000/total));
   const t:Team={id:m.id,lineup,familiarity:{},cash:150000,fan:50,expected:5,tactic:['balanced','early','late','objective'][i%4],focus:['TOP','MID','BOT'][i%3],wins:0,losses:0,sw:0,sl:0,points:0,staff:{coach:0,analyst:0,psych:0}};t.familiarity[key(t)]=50;g.teams.push(t);
  }

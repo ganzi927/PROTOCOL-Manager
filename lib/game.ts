@@ -54,7 +54,12 @@ export const SCOUT_CAP=15;
 // — 사용자 팀만 기록한다(planNotice와 같은 범위). 팀당 최근 TRAINING_LOG_CAP개만 보존.
 export type TrainingLogEntry={season:number,round:number,playerId:string,training:string,champ?:string,effect:string};
 export const TRAINING_LOG_CAP=60;
-export type Game={version:number,seed:number,season:number,split:'SPRING'|'SUMMER',round:number,stage:'REGULAR'|'PLAYOFF'|'INTERNATIONAL',phase:'PLAN'|'PREP'|'DRAFT'|'TACTICAL'|'RECAP'|'MATCH_END'|'SPLIT_END'|'OFFSEASON'|'WORLD_END',teamId:string,players:Player[],teams:Team[],fixtures:string[][][],match:Match|null,history:RecordMatch[],scout?:Record<string,SetScout[]>,trainingLog?:TrainingLogEntry[],news:string[],hall:{season:number,split:string,champion:string,rank:number}[],po:Match[],poSeeds:string[],champion:string|null,trained:boolean,offWeek:number,ledger:{label:string,amount:number}[],planNotice:string[],meta:string[],international?:International,settledWeeks?:number,sandbox?:boolean};
+export type Game={version:number,seed:number,season:number,split:'SPRING'|'SUMMER',round:number,stage:'REGULAR'|'PLAYOFF'|'INTERNATIONAL',phase:'PLAN'|'PREP'|'DRAFT'|'TACTICAL'|'RECAP'|'MATCH_END'|'SPLIT_END'|'OFFSEASON'|'WORLD_END',teamId:string,players:Player[],teams:Team[],fixtures:string[][][],match:Match|null,history:RecordMatch[],scout?:Record<string,SetScout[]>,trainingLog?:TrainingLogEntry[],news:string[],hall:{season:number,split:string,champion:string,rank:number}[],po:Match[],poSeeds:string[],champion:string|null,trained:boolean,offWeek:number,ledger:{label:string,amount:number}[],planNotice:string[],meta:string[],international?:International,settledWeeks?:number,sandbox?:boolean,
+ // F25: 연습 모드 — 마지막 실행 결과 하나만 보존한다(비교는 시드를 바꿔 다시 실행하는 방식). 시즌
+ // 기록(g.history)·선수 상태(burn/form/mastery/POG)·팀 승패에는 전혀 연결되지 않는다 — simulateSet은
+ // 순수 계산이고, 이 필드는 finishMatch()가 절대 건드리지 않는 별도 저장소이기 때문에 구조적으로 섞일
+ // 수 없다(코드 경로 자체가 없음, 조건문으로 막은 게 아님).
+ sandboxLast?:{a:string,b:string,seed:number,result:SetResult}};
 export type Command={type:string,payload?:Record<string,unknown>};
 export const clamp=(v:number,a=0,b=100)=>Math.min(b,Math.max(a,v));
 export const avg=(ns:number[])=>ns.reduce((a,b)=>a+b,0)/(ns.length||1);
@@ -800,6 +805,20 @@ export function applyCommand(source:Game,cmd:Command):Game{const g=upgradeGame(s
  case 'release':{requirePhase(g,['OFFSEASON']);const x=roster(g).find(x=>x.id===p.id);if(!x)throw Error('선수를 찾지 못했습니다.');const cost=releaseCost(g,x);if(team(g).cash<cost)throw Error(`보장 연봉 ${money(cost)}이 부족합니다.`);pay(g,team(g),-cost,'방출 정산 · '+x.name);x.teamId=null;x.releasedSeason=g.season;delete x.nextSalary;delete x.nextUntil;news(g,`${x.name} 방출. 보장급여 정산 완료.`);break;}
  case 'hireStaff':{requirePhase(g,['PLAN','PREP','OFFSEASON','SPLIT_END','WORLD_END']);const id=String(p.id),level=Number(p.level);if(!STAFF.some(x=>x.id===id)||!Number.isInteger(level)||level<0||level>3)throw Error('스태프 등급을 확인해 주세요.');const t=team(g);t.staff??={coach:0,analyst:0,psych:0};const current=t.staff[id]??0;if(current===level)throw Error('이미 고용한 등급입니다.');const fee=Math.max(0,Math.round((STAFF_COST[level]-STAFF_COST[current])*.1));if(t.cash<fee)throw Error('고용 계약금이 부족합니다.');pay(g,t,-fee,'스태프 계약금');t.staff[id]=level;news(g,`${STAFF.find(x=>x.id===id)!.name} ${level?level+'등급 고용':'계약 종료'}`);break;}
  case 'trade':{requirePhase(g,['OFFSEASON']);const a=roster(g).find(x=>x.id===p.offer),b=g.players.find(x=>x.id===p.target&&x.teamId&&x.teamId!==g.teamId);if(!a||!b||a.role!==b.role)throw Error('같은 포지션의 선수 교환만 가능합니다.');const other=team(g,b.teamId!);const quote=tradeQuote(g,a,b);if(quote.reason)throw Error(quote.reason);pay(g,team(g),-quote.cash,'트레이드 보상금 · '+b.name);pay(g,other,quote.cash,'트레이드 보상금');const old=other.id;a.teamId=old;b.teamId=g.teamId;if(team(g).lineup[a.role]===a.id)team(g).lineup[a.role]=b.id;if(other.lineup[b.role]===b.id)other.lineup[b.role]=a.id;news(g,`${a.name} ↔ ${b.name} 트레이드 성사`);break;}
+ // F25: 연습 모드 — simulateSet은 g.players/teams를 읽기만 하고 아무것도 바꾸지 않는 순수 계산이다
+ // (finishMatch를 호출하지 않는다 — 그게 실제로 burn/form/mastery/POG/스카우팅/훈련이력/g.history를
+ // 갱신하는 함수다). 그래서 이 명령은 "본 시즌에 안 섞이는" 결과를 구조적으로 보장한다. 시드는
+ // 클라이언트가 명시적으로 넘긴다 — applyCommand를 입력에 대해 순수하게 유지하기 위해(Math.random을
+ // 명령 처리 중에 쓰지 않는다, 이 프로젝트 전반의 "시드로 재현 가능해야 한다" 원칙과 동일).
+ case 'sandboxMatch':{
+  const a=String(p.a),b=String(p.b),seed=Number(p.seed);
+  const validTeam=(id:string)=>TEAM_META.some(t=>t.id===id)||FOREIGN_META.some(t=>t.id===id);
+  if(!validTeam(a)||!validTeam(b)||a===b)throw Error('서로 다른 두 팀을 선택해 주세요.');
+  if(!Number.isInteger(seed))throw Error('시드를 확인해 주세요.');
+  const sm:Match={id:`sandbox-${a}-${b}-${seed}`,a,b,bestOf:1,scoreA:0,scoreB:0,sets:[],label:'SANDBOX'};
+  g.sandboxLast={a,b,seed,result:simulateSet(g,sm)};
+  break;
+ }
  // F24: 세이브 가져오기 — 기존 슬롯의 revision·명령 영수증·백업 로테이션을 그대로 타는 일반 명령으로
  // 구현했다(별도 API 경로를 새로 만들지 않음). 그래서 "원본 보존"이 공짜로 따라온다 — API route의
  // UPDATE가 이 명령 적용 직전 상태를 backups[]에 넣고 나서 덮어쓰므로, 가져오기가 잘못돼도 기존

@@ -88,9 +88,9 @@ function DraftSummary({g,match,busy,act,onPlayer}:DraftProps){
  </div>;
 }
 
-// F18: 선수 성향 표시. engage/resource는 실제 엔진 행동(정글 합류·오브젝트 합류)에 연결돼 있다.
-// info/call은 F18 지시서의 설계 정의만 있고 아직 엔진 행동에 연결 안 됨 — 완성된 기능처럼 보이지
-// 않게 명시적으로 "아직 경기 행동에 연결 안 됨" 배지를 붙인다.
+// F18: 선수 성향 표시. engage(갱킹 합류)·resource(오브젝트 핵심 참석 합류)·info(오브젝트 로밍 합류)·
+// call(한타 성사 여부, 참가자 평균)까지 Phase D로 4축 전부 실제 엔진 결정 게이트에 연결됐다(2026-09-16).
+// connected 플래그는 다음에 새 축이 추가될 때도 "아직 연결 안 됨" 배지를 계속 쓸 수 있게 남겨 둔다.
 const AXIS_LABEL:Record<TemperamentAxis,string>={engage:'교전 성향',resource:'자원 우선순위',info:'정보 확보 성향',call:'콜 성향'};
 const TEMPERAMENT_COPY:Record<TemperamentAxis,{connected:boolean,hi:{s:string,r:string},lo:{s:string,r:string},mid:string}>={
  engage:{connected:true,
@@ -101,14 +101,14 @@ const TEMPERAMENT_COPY:Record<TemperamentAxis,{connected:boolean,hi:{s:string,r:
   hi:{s:'팀 오브젝트·한타 합류에 적극적입니다.',r:'개인 성장과 라인 웨이브를 포기할 수 있습니다.'},
   lo:{s:'라인·정글 자원을 안정적으로 확보합니다.',r:'합류가 늦어질 수 있습니다.'},
   mid:'성장과 합류 사이에서 유연하게 판단합니다.'},
- info:{connected:false,
-  hi:{s:'시야·정보를 적극적으로 확보하려 합니다.',r:'노출·이동 시간의 위험이 있습니다.'},
-  lo:{s:'생존과 현재 위치를 지키려 합니다.',r:'정보 확보 범위가 제한될 수 있습니다.'},
-  mid:'정보 확보에서 유연하게 판단합니다.'},
- call:{connected:false,
-  hi:{s:'새로운 운영 기회를 팀에 제안하려 합니다.',r:'팀이 준비되지 않으면 움직임이 갈릴 수 있습니다.'},
-  lo:{s:'일관된 팀 움직임을 유지하려 합니다.',r:'돌발 기회 대응이 늦을 수 있습니다.'},
-  mid:'상황에 따라 유연하게 판단합니다.'},
+ info:{connected:true,
+  hi:{s:'오브젝트 앞에서 로밍·정찰로 미리 움직여 합류를 만듭니다.',r:'그 과정에서 노출돼 라인을 잠깐 비웁니다.'},
+  lo:{s:'라인에 남아 안전하게 자원을 지킵니다.',r:'로밍형 합류 기회(전령 서포터·드래곤 탑 등)를 놓칠 수 있습니다.'},
+  mid:'상황에 따라 로밍 여부를 유연하게 판단합니다.'},
+ call:{connected:true,
+  hi:{s:'팀 전체가 애매한 상황에서도 기회를 살려 한타를 성사시키는 경향이 있습니다.',r:'불리한 상황에서도 그대로 붙어 질 수 있습니다.'},
+  lo:{s:'팀 전체가 확실하지 않으면 무교전으로 물러나는 경향이 있습니다.',r:'유리했을 기회도 놓칠 수 있습니다.'},
+  mid:'팀 전체가 상황에 따라 유연하게 교전 여부를 판단합니다.'},
 };
 function TemperamentPanel({p}:{p:Player}){
  const t=temperamentOf(p.id);

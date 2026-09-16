@@ -232,6 +232,9 @@ export function narrateEvent(c:NarrCtx,mem:NarrMemory,rng:()=>number):NarrateRes
   else if(late.length)at(24,'합류', `${late.slice(0,2).map(n=>`${nameOf(n.ref)}(${n.reason})`).join(', ')} — 제때 합류하지 못합니다.`);
   const objLever=managerLever(c,wa,'obj'); // 감독 결정 — 상태로 확인될 때만
   if(objLever)at(14,'벤치',objLever);
+  // F18 Phase D: 정보 확보 성향(info) — 로밍 슬롯의 결정이 실제로 성향 방향과 일치했을 때만(cb.evidence).
+  const infoNote=(cb.evidence||[]).find(e=>e.includes('적극 탐색 성향')||e.includes('안전 확인 성향'));
+  if(infoNote) at(13,'성향',infoNote);
 
   if(cb.kills.length){
    const kr=cb.kills[0], vc=nameOf(kr.victim), kc=nameOf(kr.killer), asst=kr.assists.map(nameOf).filter(Boolean);
@@ -300,6 +303,11 @@ export function narrateEvent(c:NarrCtx,mem:NarrMemory,rng:()=>number):NarrateRes
   if(protectNote) at(21,'작전 지시', `${protectNote.startsWith('A')?c.aShort:c.bShort} 감독이 이번 한타에서 딜러 보호를 지시했습니다 — 서포터가 보호에 더 집중합니다.`);
   if((cb.evidence||[]).some(e=>e.includes('위험을 감수')))
    at(21,'작전 지시', `감독이 위험을 감수하고 교전을 강행하라 지시했습니다 — 불리해 보여도 물러나지 않습니다.`);
+  // F18 Phase D: 콜 성향(call)도 같은 원칙 — cb.evidence에 실제로 찍힌 경우만 언급한다.
+  if((cb.evidence||[]).some(e=>e.includes('기회 제안 성향')))
+   at(17,'콜',`양 팀 모두 애매한 상황에서도 기회를 살려 들어갑니다.`);
+  else if((cb.evidence||[]).some(e=>e.includes('계획 준수 성향')))
+   at(17,'콜',`양 팀 모두 확실하지 않으면 계획대로 물러섭니다.`);
 
   const initiator=[...fr.contrib].sort((x,y)=>y.engage-x.engage)[0];
   const protector=fr.contrib.find(x=>x.protect>0);

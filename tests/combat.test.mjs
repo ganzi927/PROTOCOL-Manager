@@ -614,10 +614,12 @@ const CRNG=()=>random(hash('obj-test'));
  }
  // (2) 성향=0(균형)은 기존(성향 도입 전) 공식과 수학적으로 동일 — mkState(temperamentFn 생략) 기반의
  //     기존 10j~10l 등 섹션이 전부 그대로 통과한다는 사실 자체가 이미 회귀 없음의 직접 증거(가산항이 0).
- // (3) 자원 우선순위(resource) — A 서포터(slot4, 전령 로밍 조건 슬롯)의 오브젝트 합류율이 성장↔합류에 따라 갈린다.
+ // (3) 자원 우선순위(resource) — A 탑(slot0, 전령의 "핵심 참석" 슬롯)의 오브젝트 합류율이 성장↔합류에 따라 갈린다.
+ //     (F18 Phase D에서 slot4=condSlot(로밍)은 info 전용으로 넘어갔다 — 9d(3)이 그 회귀를 확인한다. 여기서는
+ //     resource가 여전히 담당하는 "핵심 참석" 슬롯으로 바꿔 검증한다.)
  {
   const N=1500;
-  const joinRate=resourceVal=>{let j=0;for(let s=0;s<N;s++){const st=mkTempState(withResource('A',4,resourceVal));const ce=resolveObjective(st,3,'herald',true,0.3,660,seedRng('f18-obj-'+resourceVal+'-'+s));if(ce.participants.some(p=>p.side==='A'&&p.slot===4))j++;}return j/N;};
+  const joinRate=resourceVal=>{let j=0;for(let s=0;s<N;s++){const st=mkTempState(withResource('A',0,resourceVal));const ce=resolveObjective(st,3,'herald',true,0.3,660,seedRng('f18-obj-'+resourceVal+'-'+s));if(ce.participants.some(p=>p.side==='A'&&p.slot===0))j++;}return j/N;};
   const growth=joinRate(-1), neutral=joinRate(0), regroup=joinRate(1);
   assert.ok(regroup>neutral+0.03,`합류형(+1)이 균형(0)보다 오브 합류율 높음: ${(regroup*100).toFixed(1)}% > ${(neutral*100).toFixed(1)}%`);
   assert.ok(neutral>growth+0.03,`균형(0)이 성장형(-1)보다 오브 합류율 높음: ${(neutral*100).toFixed(1)}% > ${(growth*100).toFixed(1)}%`);
@@ -635,6 +637,72 @@ const CRNG=()=>random(hash('obj-test'));
   const st1=mkTempState(withEngage('A',1,0.7)), st2=mkTempState(withEngage('A',1,0.7));
   const a=resolveGank(st1,0,0,true,0.3,150,seedRng('f18-det')), b=resolveGank(st2,0,0,true,0.3,150,seedRng('f18-det'));
   assert.equal(JSON.stringify(a),JSON.stringify(b),'같은 시드·같은 성향 → 결정적 동일 결과');
+ }
+}
+
+// --- 9d. F18 Phase D: info(안전 확인↔적극 탐색)·call(계획 준수↔기회 제안) 결정 게이트 연결 ---
+{
+ const seedRng=tag=>random(hash(tag));
+ const S70=()=>Array(6).fill(70);
+ const NEUTRAL=()=>({engage:0,resource:0,info:0,call:0});
+ const mkTempState=(temperFn)=>newMatchState(
+  ROLES.map(r=>({stats:S70(),name:'A_'+r,role:r})),
+  ROLES.map(r=>({stats:S70(),name:'B_'+r,role:r})),
+  ['p0','p1','p2','p3','p4'],['q0','q1','q2','q3','q4'],
+  ()=>0,()=>false,temperFn);
+
+ // (1) info — herald의 condSlot(A 서포터, slot4)은 "로밍" 전용 슬롯이라 info가 붙는다. 단조 증가.
+ {
+  const N=1500;
+  const withInfo=(v)=>(s,sl)=>s==='A'&&sl===4?{...NEUTRAL(),info:v}:NEUTRAL();
+  const joinRate=v=>{let j=0;for(let s=0;s<N;s++){const st=mkTempState(withInfo(v));const ce=resolveObjective(st,3,'herald',true,0.3,660,seedRng('f18d-info-'+v+'-'+s));if(ce.participants.some(p=>p.side==='A'&&p.slot===4))j++;}return j/N;};
+  const safe=joinRate(-1), neutral=joinRate(0), explore=joinRate(1);
+  assert.ok(explore>neutral+0.03,`적극 탐색(+1)이 균형(0)보다 로밍 합류율 높음: ${(explore*100).toFixed(1)}% > ${(neutral*100).toFixed(1)}%`);
+  assert.ok(neutral>safe+0.03,`균형(0)이 안전 확인(-1)보다 로밍 합류율 높음: ${(neutral*100).toFixed(1)}% > ${(safe*100).toFixed(1)}%`);
+ }
+ // (2) info는 "핵심 참석" 슬롯(예: dragon의 ADC, slot3)엔 안 닿는다 — resource와 같은 확률에 중복 가산 금지.
+ //     info를 극단으로 바꿔도 이 슬롯의 합류율은 균형형과 사실상 같아야 한다.
+ {
+  const N=1500;
+  const withInfoOnCore=(v)=>(s,sl)=>s==='A'&&sl===3?{...NEUTRAL(),info:v}:NEUTRAL();
+  const joinRate=v=>{let j=0;for(let s=0;s<N;s++){const st=mkTempState(withInfoOnCore(v));const ce=resolveObjective(st,6,'dragon',true,0.3,900,seedRng('f18d-info-core-'+v+'-'+s));if(ce.participants.some(p=>p.side==='A'&&p.slot===3))j++;}return j/N;};
+  const neutral=joinRate(0), explore=joinRate(1);
+  assert.ok(Math.abs(explore-neutral)<0.03,`info는 핵심 참석 슬롯(ADC)의 합류율을 바꾸지 않음(resource 전용 채널): 균형 ${(neutral*100).toFixed(1)}% vs 탐색 ${(explore*100).toFixed(1)}%`);
+ }
+ // (3) resource는 반대로 condSlot(로밍)엔 더 이상 안 닿는다(Phase D에서 info로 넘어감) — 회귀 확인.
+ {
+  const N=1500;
+  const withResourceOnCond=(v)=>(s,sl)=>s==='A'&&sl===4?{...NEUTRAL(),resource:v}:NEUTRAL();
+  const joinRate=v=>{let j=0;for(let s=0;s<N;s++){const st=mkTempState(withResourceOnCond(v));const ce=resolveObjective(st,3,'herald',true,0.3,660,seedRng('f18d-res-cond-'+v+'-'+s));if(ce.participants.some(p=>p.side==='A'&&p.slot===4))j++;}return j/N;};
+  const neutral=joinRate(0), regroup=joinRate(1);
+  assert.ok(Math.abs(regroup-neutral)<0.03,`resource는 condSlot(로밍)의 합류율을 더 이상 바꾸지 않음(info 전용 채널로 이동): 균형 ${(neutral*100).toFixed(1)}% vs 합류형 ${(regroup*100).toFixed(1)}%`);
+ }
+ // (4) call — 한타 참가자 전체 평균이 engageP(교전 성사 여부)에만 영향. 승패(favWins)엔 안 닿는다.
+ {
+  const N=2000;
+  const mkTFState=(callVal)=>newMatchState(
+   ROLES.map(r=>({stats:S70(),name:'A_'+r,role:r})),
+   ROLES.map(r=>({stats:S70(),name:'B_'+r,role:r})),
+   ['p0','p1','p2','p3','p4'],['q0','q1','q2','q3','q4'],
+   ()=>0,()=>false,()=>({...NEUTRAL(),call:callVal}));
+  const run=callVal=>{let noEngage=0,aWin=0,bWin=0,tf=0;for(let s=0;s<N;s++){const st=mkTFState(callVal);const ce=resolveTeamfight(st,7,true,0.0,1080,seedRng('f18d-call-'+callVal+'-'+s));tf++;if(ce.fight.result==='NO_ENGAGE'){noEngage++;continue;}if(ce.fight.winner==='A')aWin++;else if(ce.fight.winner==='B')bWin++;}return {noEngage,tf,aWin,bWin};};
+  const plan=run(1), neutral=run(0), discipline=run(-1);
+  assert.ok(plan.noEngage<neutral.noEngage,`기회 제안(+1) → 무교전 감소: ${neutral.noEngage}/${N} → ${plan.noEngage}/${N}`);
+  assert.ok(discipline.noEngage>neutral.noEngage,`계획 준수(-1) → 무교전 증가: ${neutral.noEngage}/${N} → ${discipline.noEngage}/${N}`);
+  // 승패 비율(교전이 성립한 것들 중 A가 이긴 비율)은 call과 무관해야 한다 — margin=0(양쪽 동일)이라 이론상 0.5 근접.
+  const winShare=r=>r.aWin/(r.aWin+r.bWin);
+  assert.ok(Math.abs(winShare(plan)-winShare(discipline))<0.06,`call은 승패 비율을 바꾸지 않음(engageP 전용 채널): 기회 제안 ${(winShare(plan)*100).toFixed(1)}% vs 계획 준수 ${(winShare(discipline)*100).toFixed(1)}%`);
+ }
+ // (5) 결정성: 같은 시드·같은 성향 → 같은 결과(info/call 모두).
+ {
+  const st1=mkTempState((s,sl)=>s==='A'&&sl===4?{...NEUTRAL(),info:0.6}:NEUTRAL());
+  const st2=mkTempState((s,sl)=>s==='A'&&sl===4?{...NEUTRAL(),info:0.6}:NEUTRAL());
+  const a=resolveObjective(st1,3,'herald',true,0.3,660,seedRng('f18d-det')), b=resolveObjective(st2,3,'herald',true,0.3,660,seedRng('f18d-det'));
+  assert.equal(JSON.stringify(a),JSON.stringify(b),'info: 같은 시드·같은 성향 → 결정적 동일 결과');
+  const tf1=newMatchState(ROLES.map(r=>({stats:S70(),name:'A_'+r,role:r})),ROLES.map(r=>({stats:S70(),name:'B_'+r,role:r})),['p0','p1','p2','p3','p4'],['q0','q1','q2','q3','q4'],()=>0,()=>false,()=>({...NEUTRAL(),call:0.5}));
+  const tf2=newMatchState(ROLES.map(r=>({stats:S70(),name:'A_'+r,role:r})),ROLES.map(r=>({stats:S70(),name:'B_'+r,role:r})),['p0','p1','p2','p3','p4'],['q0','q1','q2','q3','q4'],()=>0,()=>false,()=>({...NEUTRAL(),call:0.5}));
+  const ta=resolveTeamfight(tf1,7,true,0.0,1080,seedRng('f18d-tf-det')), tb=resolveTeamfight(tf2,7,true,0.0,1080,seedRng('f18d-tf-det'));
+  assert.equal(JSON.stringify(ta),JSON.stringify(tb),'call: 같은 시드·같은 성향 → 결정적 동일 결과');
  }
 }
 

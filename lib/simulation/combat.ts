@@ -146,6 +146,13 @@ const KILL_G=300, ASSIST_G=150, CS_HEAVY=150, CS_LIGHT=110, DEATH_G=210;
 // 첫 값은 보수적 설계 가설이며 실측 검증 전이다(§8, DECISIONS.md 참조) — 임계값을 승률에 맞춰 조용히 올리지 않는다.
 const ENGAGE_TRAIT_W=0.08;
 const RESOURCE_TRAIT_W=0.08;
+// F18 Phase D: info(안전 확인↔적극 탐색)·call(계획 준수↔기회 제안)도 같은 원칙 — 결정 게이트에만,
+// 같은 크기 단위(0.08)로 시작하는 보수적 가설. 실측 전이며 승률에 맞춰 조용히 올리지 않는다(§8).
+const INFO_TRAIT_W=0.08;
+const CALL_TRAIT_W=0.08;
+// call은 한타 참가자(최대 10명) 평균이라 중심극한정리로 개인 성향보다 훨씬 0에 몰린다 — 근거 로그의
+// "눈에 띄는 평균" 문턱은 개인 균형형 문턱(0.34)보다 낮게 별도로 둔다(감으로 정한 값, 실측 후 조정 가능).
+const CALL_NOTABLE=0.12;
 
 // 2대1 갱킹(탑=0 / 미드=1). 스켈레톤이 넘긴 phaseWinner(wa: A가 이 구간 우위)와 margin(0~1)으로
 // "어떻게" 이겼는지 결정한다: 킬 / 합류했으나 놓침 / 발각·무산 / 순수 라인 판정. 참여자·처치·자원은
@@ -342,24 +349,34 @@ export function resolveObjective(
  const baseSlots=kind==='herald'?[1,0,2]:[1,2,3,4];
  const condSlot=kind==='herald'?4:0; // 전령: 서포터 로밍 / 드래곤: 탑 로밍
 
+ const condEv:string[]=[]; // F18 Phase D: condSlot(로밍) 결정이 성향 때문에 갈린 사례만 근거로 남긴다.
  const select=(side:Side)=>{
   const joined:number[]=[]; const notJoined:{ref:Ref,reason:string}[]=[];
-  const consider=(slot:number, base:number)=>{
+  const consider=(slot:number, base:number, isCond:boolean)=>{
    const c=st[side][slot];
    if(!c.alive){ notJoined.push({ref:{side,slot},reason:'전투 이탈(리스폰 대기)'}); return; }
    const laneGap=c.gold-st[opp(side)][slot].gold; // + = 이 슬롯이 우세
    let arriveP:number;
    if(!hasArrived(c,'river',clock,kind==='herald'?'baron':'dragon')){notJoined.push({ref:{side,slot},reason:'이동 중(도착 전)'});return;}
-   // F18: 정글·미드는 이미 오브 근처라 성향이 끼어들 여지가 적다(값 고정 유지). 그 외 슬롯만
-   // 자원 우선순위 성향(resource: 성장↔합류)이 "합류할지" 판단에 더해진다 — 확보 전력(power())엔 안 닿는다.
+   // F18: 정글·미드는 이미 오브 근처라 성향이 끼어들 여지가 적다(값 고정 유지). 그 외 슬롯은 두 성향
+   // 축 중 하나만 받는다(같은 확률에 중복 가산 금지) — 확보 전력(power())엔 어느 쪽도 안 닿는다.
+   //  - "핵심 참석" 슬롯(base=0.9, baseSlots): 자원 우선순위(resource: 성장↔합류) — 이미 확정된 팀
+   //    계획에 합류할지 자체가 갈릴 때만.
+   //  - condSlot(base=0.42, 로밍형 슬롯): 정보 확보 성향(info: 안전 확인↔적극 탐색) — 원래도 절반
+   //    확률로 "정찰 겸 로밍"인 자리라, 노출 위험을 감수하고 미리 움직이는지가 갈린다.
    if(slot===1) arriveP=0.99;              // 정글: 오브 주변, 거의 확정
    else if(slot===2) arriveP=0.9;           // 미드: 중앙, 대체로 합류
+   else if(isCond) arriveP=clamp01(base+laneGap/900+(eff(c,S_TF)-55)/230+c.temperament.info*INFO_TRAIT_W+c.challengeBonus.objJoinBonus);
    else arriveP=clamp01(base+laneGap/900+(eff(c,S_TF)-55)/230+c.temperament.resource*RESOURCE_TRAIT_W+c.challengeBonus.objJoinBonus);
-   if(crng()<arriveP) joined.push(slot);
-   else notJoined.push({ref:{side,slot},reason:laneGap<-150?'라인 처리':c.temperament.resource<=-TEMPERAMENT_BALANCED_BAND?'라인 잔류(성장 성향)':'도착 지연'});
+   const rolled=crng()<arriveP;
+   if(rolled) joined.push(slot);
+   else notJoined.push({ref:{side,slot},reason:laneGap<-150?'라인 처리':isCond?(c.temperament.info<=-TEMPERAMENT_BALANCED_BAND?'라인 잔류(안전 확인 성향)':'도착 지연'):(c.temperament.resource<=-TEMPERAMENT_BALANCED_BAND?'라인 잔류(성장 성향)':'도착 지연')});
+   // F18: 극단 성향 + 실제로 그 방향의 선택일 때만 근거를 남긴다(성향 때문에 선택이 달라졌다고 볼 근거).
+   if(isCond&&rolled&&c.temperament.info>=TEMPERAMENT_BALANCED_BAND) condEv.push(`${c.player}의 적극 탐색 성향 — 미리 움직여 합류`);
+   else if(isCond&&!rolled&&c.temperament.info<=-TEMPERAMENT_BALANCED_BAND) condEv.push(`${c.player}의 안전 확인 성향 — 노출을 피해 라인에 남음`);
   };
-  for(const s of baseSlots) consider(s,0.9);
-  consider(condSlot,0.42);
+  for(const s of baseSlots) consider(s,0.9,false);
+  consider(condSlot,0.42,true);
   return {joined,notJoined};
  };
  const fav=select(favSide), oth=select(othSide);
@@ -388,7 +405,7 @@ export function resolveObjective(
   if(!st.firstKillDone){ st.firstKillDone=true; firstBlood=true; }
  };
  const objKor=kind==='herald'?'전령':'드래곤';
- const ev:string[]=[`${objKor} — ${favSide} ${fav.joined.length}인 vs ${othSide} ${oth.joined.length}인`];
+ const ev:string[]=[`${objKor} — ${favSide} ${fav.joined.length}인 vs ${othSide} ${oth.joined.length}인`,...condEv];
  if(st.pendingObjective) ev.push(`앞선 ${st.pendingObjective==='herald'?'전령':'드래곤'} 교전은 무산됐던 상황`);
 
  let secured:Side|null, outcome:string;
@@ -505,6 +522,11 @@ export function resolveTeamfight(
  }
  const dEngage=directorBonus?.engage??0, dFavor=directorBonus?.favor??0;
  const nFav=(favSide==='A'?aA0:aB0).length, nOth=(favSide==='A'?aB0:aA0).length;
+ // F18 Phase D: 콜 성향(call: 계획 준수↔기회 제안) — 실제 참가자 전체 평균이 "이 한타가 실제로
+ // 열리는지"(engageP)에만 더해진다. F12의 dEngage와 같은 성격의 결정 게이트(승패favWins엔 안 닿음) —
+ // 기회 제안이 많으면 애매한 상황도 교전으로 이어지고(대가: margin이 불리해도 그대로 열림·그대로 짐),
+ // 계획 준수가 많으면 애매한 상황은 무교전으로 넘어간다(대가: 이겼을 기회도 놓칠 수 있음).
+ const avgCall=partRefs.length?partRefs.reduce((s,r)=>s+st[r.side][r.slot].temperament.call,0)/partRefs.length:0;
 
  const res=[0,0,0,0,0, 0,0,0,0,0];
  const add=(c:Combatant,g:number)=>{c.gold+=g; res[(c.side==='A'?0:5)+c.slot]+=g;};
@@ -536,9 +558,10 @@ export function resolveTeamfight(
   const numAdvFav=(nFav-nOth)*0.16;                       // 실제 사망이 만든 인원차 — p에 없던 새 채널
   // F12: 위험 감수 진입 지시는 교전 성사 확률을 밀어 올린다(dEngage, 크기만·양쪽 공용) — 안 열렸을 무교전을
   // 강제로 열게 만드는 것 자체가 이 지시의 대가다(margin이 불리해도 fight는 열리고, 지면 그대로 진다).
-  const engageP=clamp01(0.88+margin*0.05+Math.abs(plan.entry)-Math.abs(plan.preparation)*.6+dEngage);               // 대부분 교전 성립. 무교전은 팽팽한 경기의 드문 예외
-  if(crng()>=engageP){ result='NO_ENGAGE'; winner=null; ev.push('양 팀 대치만 하다 물러남 — 무교전'); }
+  const engageP=clamp01(0.88+margin*0.05+Math.abs(plan.entry)-Math.abs(plan.preparation)*.6+dEngage+avgCall*CALL_TRAIT_W);               // 대부분 교전 성립. 무교전은 팽팽한 경기의 드문 예외
+  if(crng()>=engageP){ result='NO_ENGAGE'; winner=null; ev.push('양 팀 대치만 하다 물러남 — 무교전'); if(avgCall<=-CALL_NOTABLE) ev.push('양 팀 전반적으로 계획 준수 성향 — 무리한 교전을 피함'); }
   else {
+   if(avgCall>=CALL_NOTABLE) ev.push('양 팀 전반적으로 기회 제안 성향 — 애매한 상황에도 교전이 성립');
    // 승패 = margin(이미 p에 반영된 전력·자원·조합의 요약) + 실제 인원차 + (있다면) 위험 감수 진입의 소폭 편향.
    const favWins=crng()<clamp01(0.5+margin*0.75+numAdvFav+(edgeA?1:-1)*(plan.preparation+plan.entry+plan.growth)+(favSide==='A'?dFavor:-dFavor));
    const decisive=margin>0.16||Math.abs(nFav-nOth)>=2;

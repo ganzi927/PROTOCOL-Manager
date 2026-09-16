@@ -67,6 +67,25 @@ const FALLBACK_CHAMP:Champion={id:'?',name:'미상',role:'MID',type:'혼합',tag
 export const champById=(id:string):Champion=>CHAMPIONS.find(c=>c.id===id)??{...FALLBACK_CHAMP,id,name:id};
 export const champName=(id:string):string=>champById(id).name;
 export const masteryLevel=(p:Player,champId:string):number=>p.mastery?.find(m=>m.champ===champId)?.level??0;
+// F19: 유망주 잠재력을 확정 숫자로 공개하지 않는다 — 스카우트 관측 범위(오차 포함)와 체감 육성 거리만
+// 보여준다. 실제 성장 상한(p.pot, train()이 그대로 쓰는 숨은 값)은 이 함수가 노출하지 않는다. 화면에
+// 보이는 범위 중심은 id 기반 결정적 오차를 더한 "추정치"일 뿐이라 진짜 pot과 다를 수 있다 — 재계산해도
+// 항상 같은 값(구세이브를 불러올 때마다 다시 추첨되지 않음, temperament.ts와 같은 순수 함수 패턴).
+// 나이가 어릴수록 오차 폭이 커진다(실전 표본이 적어 예측이 어렵다는 뜻) — "싼 유망주가 무조건 최선이
+// 아니다"를 뒷받침하려고 devTier(육성 거리)를 함께 준다. 정확한 훈련 소요 주수는 계산하지 않는다 —
+// train()의 실제 성장식은 스탯별 체감·훈련 종류·코치 보너스가 얽혀 있어 단일 숫자로 요약하면 거짓
+// 정밀도가 된다(project-wide 원칙: 추상 수치를 실제 관측량처럼 표시하지 않는다).
+export type ScoutEstimate={lo:number,hi:number,devTier:'가까움'|'보통'|'멂'};
+export function scoutPotential(p:Player):ScoutEstimate{
+ const err=random(hash(`${p.id}|scout|pot`))()*2-1; // -1~1, id 기반 결정적(재추첨 없음)
+ const band=clamp(4+(25-p.age)*1.3,4,28); // 나이가 어릴수록 오차 폭 확대, 25세 근방부터 좁아짐
+ const center=clamp(avg(p.pot)+err*band*0.6,avg(p.stats),99);
+ const lo=Math.round(clamp(center-band*0.5,avg(p.stats),99));
+ const hi=Math.round(clamp(center+band*0.5,avg(p.stats),99));
+ const gap=hi-ovr(p);
+ const devTier:ScoutEstimate['devTier']=gap<=6?'가까움':gap<=16?'보통':'멂';
+ return {lo,hi,devTier};
+}
 // 한국어 조사 헬퍼는 중계로 이동했다 → lib/simulation/narration.ts
 export const isMeta=(g:Game,champId:string):boolean=>!!g.meta?.includes(champId);
 export function metaChampions(seed:number,season:number):string[]{

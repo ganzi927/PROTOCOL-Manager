@@ -21,3 +21,12 @@ export async function POST(request:Request){const id=owner(request);if(!id)retur
  let game:Game;try{if(command.type==='restoreBackup'){const backup=(JSON.parse(row.backups??'[]') as Backup[]).find(x=>x.revision===command.payload?.revision);if(!backup)throw Error('복원 지점이 만료되었습니다. 최신 기록을 불러와 주세요.');game=upgradeGame(JSON.parse(backup.state));}else game=applyCommand(JSON.parse(row.state),command);}catch(e){return response({error:(e as Error).message},422);}
  const next=[{id:commandId,fingerprint},...receipts].slice(0,40);const backups:Backup[]=[{revision:row.revision,state:row.state,updatedAt:row.updated_at},...JSON.parse(row.backups??'[]')].slice(0,3);const result=await db.prepare('UPDATE careers SET state=?,revision=revision+1,receipts=?,updated_at=?,backups=? WHERE owner=? AND slot=? AND revision=?').bind(JSON.stringify(game),JSON.stringify(next),now,JSON.stringify(backups),id,slot,revision).run();if(!result.meta.changes)return response({error:'진행 기록이 변경되었습니다. 다시 불러와 주세요.',conflict:true},409);return response({game,revision:revision+1,updatedAt:now,restorePoints:points(backups)});
  }catch{console.error('career_save_failed');return response({error:'진행 기록을 저장하지 못했습니다. 같은 작업을 다시 시도해 주세요.'},503);}}
+// 슬롯 초기화: 현재 슬롯의 커리어·복원 지점을 완전히 삭제한다(되돌릴 수 없음, 내보내기와 다름).
+// 되돌릴 여지가 있는 다른 변경(가져오기 등)은 기존 POST 명령·revision 경로를 그대로 쓰지만, 이건
+// 그 행 자체를 지우는 것이라 revision 개념이 없다 — 별도 DELETE 메서드로 분리해 실수로 일반 명령
+// 재시도(commandId 영수증) 경로를 타지 않게 한다.
+export async function DELETE(request:Request){const id=owner(request);if(!id)return response({error:'로그인이 필요합니다.',auth:true},401);
+ try{const slot=Number(new URL(request.url).searchParams.get('slot')??1);if(!validSlot(slot))return response({error:'저장 슬롯을 확인해 주세요.'},400);
+ const db=getStore();await db.prepare('DELETE FROM careers WHERE owner=? AND slot=?').bind(id,slot).run();
+ return response({ok:true});
+ }catch{console.error('career_delete_failed');return response({error:'커리어를 초기화하지 못했습니다. 잠시 후 다시 시도해 주세요.'},503);}}

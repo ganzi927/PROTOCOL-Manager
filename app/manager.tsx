@@ -129,7 +129,7 @@ function DraftSummary({g,match,busy,act,onPlayer}:DraftProps){
  return <div className="draft-board">
   <SectionTitle title={`SET ${match.sets.length+1} · 밴픽 완료`} sub="포지션 드롭다운으로 라인을 스왑할 수 있습니다. ⚠ 오프라인(라인 밖) 챔피언은 능력치 패널티, flex 챔피언은 패널티 없음. ★ 숙련·🔥 메타 픽은 능력치 가산."/>
   <div className="draft-columns">{([match.a,match.b] as const).map(tid=>{const picks=tid===match.a?d.picksA:d.picksB;const line=starters(g,tid);const mine=tid===g.teamId;const cc={AD:0,AP:0,'혼합':0} as Record<string,number>;for(const c of picks)cc[champById(c).type]++;return <div key={tid}><h3>{meta(tid).short}<small>{tid===match.draftState?.blue?' 블루':' 레드'}</small><span className="comp-line"> AD {cc.AD} · AP {cc.AP}{cc['혼합']?` · 혼합 ${cc['혼합']}`:''}</span></h3>{picks.map((c,i)=>{const st=line[i];const ml=st?masteryLevel(st,c):0;const fit=roleFit(c,ROLES[i]);return <div className={`draft-player${fit==='off'?' off-role':''}`} key={ROLES[i]}><span className="role-label">{ROLES[i]}</span><Champ id={c} hot={isMeta(g,c)}/><small>{st?<button className="player-link" onClick={()=>onPlayer(st)}>{st.name}</button>:'—'}{ml>0&&<b className="lime"> ★{ml}</b>}{fit==='off'&&<b className="danger" title="라인 밖 챔피언 — 능력치 패널티"> ⚠</b>}{fit==='flex'&&<b className="muted" title="flex — 패널티 없음"> flex</b>}</small>{mine&&<select className="swap-select" disabled={busy} value={ROLES[i]} onChange={e=>act({type:'draftSwap',payload:{from:i,to:ROLES.indexOf(e.target.value as Role)}})}>{ROLES.map(r=><option key={r} value={r}>{r}</option>)}</select>}</div>;})}</div>;})}</div>
-  <CompositionPanel mine={g.teamId===match.a?d.picksA:d.picksB} enemy={g.teamId===match.a?d.picksB:d.picksA}/><div className="ban-list"><span>BANNED</span>{d.bans.map(id=><span key={id}>{champName(id)}</span>)}</div>
+  <CompositionPanel mine={g.teamId===match.a?d.picksA:d.picksB} enemy={g.teamId===match.a?d.picksB:d.picksA} g={g}/><div className="ban-list"><span>BANNED</span>{d.bans.map(id=><span key={id}>{champName(id)}</span>)}</div>
   <div className="panel-action"><Button variant="ghost" size="sm" disabled={busy} onClick={()=>act({type:'draftReset'})}>다시 밴픽</Button><Button className="primary-button" disabled={busy} onClick={()=>act({type:'play'})}><Play size={17}/>세트 경기 시작</Button></div>
  </div>;
 }
@@ -246,7 +246,7 @@ function LiveDraft({g,match,busy,act,onPlayer}:DraftProps){
  const bans=(s:'B'|'R')=>ds.bans.filter(b=>b.side===s).map(b=><span key={b.champ}>{champName(b.champ)}</span>);
  return <div className="draft-board draft-live">
   <div className="draft-turn"><Badge tone={myTurn?'lime':'muted'}>{myTurn?'내 차례':`${meta(turnTeam).short} 진행 중`}</Badge><span>{side==='B'?'블루':'레드'} · {kind==='BAN'?'밴':'픽'} {kindIdx} <small>({step+1}/20)</small></span><Button variant="ghost" size="sm" disabled={busy} onClick={()=>act({type:'draftReset'})}>드래프트 초기화</Button></div>
-  <CompositionPanel mine={(g.teamId===ds.blue?ds.picksBlue:ds.picksRed).map(p=>p.champ)} enemy={(g.teamId===ds.blue?ds.picksRed:ds.picksBlue).map(p=>p.champ)}/><div className="draft-live-grid">
+  <CompositionPanel mine={(g.teamId===ds.blue?ds.picksBlue:ds.picksRed).map(p=>p.champ)} enemy={(g.teamId===ds.blue?ds.picksRed:ds.picksBlue).map(p=>p.champ)} g={g}/><div className="draft-live-grid">
    <div className="draft-team blue"><h3>{meta(ds.blue).short} <small>블루</small></h3>{slots(ds.blue)}<div className="picked-label">이번 세트 픽 ({ds.picksBlue.length}/5)</div>{picked(ds.blue)}<div className="ban-strip">{bans('B')}</div></div>
    <div className="draft-pool">
     {myTurn?<>

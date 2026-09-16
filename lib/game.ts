@@ -48,7 +48,7 @@ export type Match={id:string,a:string,b:string,bestOf:number,scoreA:number,score
 export type RecordMatch={id:string,a:string,b:string,sa:number,sb:number,winner:string,label:string,season:number};
 // F16: 스카우팅 표본. 세트 하나당 한 팀 관점으로 하나 — 원본 사건(events/recap) 전체가 아니라
 // "다음 상대 준비"에 실제 쓰이는 요약값만 남긴다(저장 용량 무한 증가 방지, 팀당 최근 SCOUT_CAP개만 보존).
-export type SetScout={season:number,picks:string[],oppPicks:string[],won:boolean,endReason?:'NEXUS'|'CAP_TIME'|'CAP_EVENT',tookFirstStruct:boolean,objSecured:number,objTotal:number,leadSlots:number[],pogRole?:string};
+export type SetScout={season:number,picks:string[],oppPicks:string[],won:boolean,endReason?:'NEXUS'|'CAP_TIME'|'CAP_EVENT',tookFirstStruct:boolean,objSecured:number,objTotal:number,leadSlots:number[],pogRole?:string,stage?:'REGULAR'|'PLAYOFF'|'INTERNATIONAL'};
 export const SCOUT_CAP=15;
 // F17: 훈련 이력. 선수/조합(특훈이면 챔피언)/날짜(시즌·라운드)/강도(훈련 종류)/효과(실제 적용된 수치)를 남긴다
 // — 사용자 팀만 기록한다(planNotice와 같은 범위). 팀당 최근 TRAINING_LOG_CAP개만 보존.
@@ -706,6 +706,7 @@ function finishMatch(g:Game,m:Match){m.winner=m.scoreA>m.scoreB?m.a:m.b;const a=
     objSecured:objEvents.filter(e=>e.combat!.objective!.secured===side).length, objTotal:objEvents.length,
     leadSlots:(s.leadA??[0,0,0,0,0]).map(v=>mine?v:-v),
     pogRole:s.winner===tid&&pogSlot>=0?ROLES[pogSlot]:undefined,
+    stage:g.stage,
    });
   }
   g.scout[tid]=samples.slice(0,SCOUT_CAP);

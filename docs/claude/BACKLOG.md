@@ -17,7 +17,7 @@
 | MATCH-SYS | P1 | IN_PROGRESS | ABIL-01·COMP-01·CAST-01을 하나의 경기 시스템으로 통합. 단위 1(D010)·2(D011)·3(D012)·4(D014)·5(D015)·5 점검(D017)·6 첫 슬라이스(D019: POG를 실제 사건 기여로, `pogReason`)·6 첫 슬라이스 점검·수정(D020: 이중가산·고정슬롯 동점) 완료. 다음: 단위 6 step 5(리캡을 근거 사건화) — **MINIMAP 완성 다음 우선순위로 미룸(사용자 지시)**. 아래 "MATCH-SYS" 절 참조 |
 | SAVE-01 | P1 | TODO | v1/v2와 서로 다른 v3 형태의 마이그레이션 검증 |
 | SAVE-02 | P2 | DONE | 저장 슬롯 초기화(사용자 요청, 2026-09-16). `설정 및 저장`에 "위험 구역" 패널 신설 — 현재 슬롯의 커리어·복원 지점을 DB에서 완전히 삭제하는 `DELETE /api/game?slot=N` 신규 엔드포인트(D033). 기존 명령/revision 경로를 재사용하지 않고 완전히 분리(행 자체가 없어지는 동작이라 낙관적 동시성 개념이 안 맞음). 가져오기 덮어쓰기와 달리 복원 지점도 함께 지워 되돌릴 수 없음을 확인 다이얼로그에 명시. 브라우저에서 실제 존재하던 슬롯을 초기화해 DB 행이 진짜 삭제됐음(`GET`이 `game:null` 반환)과 다른 슬롯은 무영향임을 직접 확인. |
-| REAL-01 | P2 | IN_PROGRESS | 실제 로스터·사진·능력치 연결(사용자 요청, 2026-09-16). **로스터 데이터 구조·사진 인프라는 완료**: `lib/rosters.ts`를 배열 위치 매핑에서 role 키 매핑(`RosterPlayer{handle,realName,role,status,sourceUrl,confirmedAt}`)으로 재구성(D034), Wikimedia Commons에서 실제 확인된 URL만으로 선수 사진 10명·팀 로고 4개 적용(재호스팅 없음, 렌더 시점 조회 — 저장 상태 무영향). **로스터 데이터 자체는 대부분 미검증 상태로 남음**: 이 환경에서 1차 출처(Liquipedia·LCK 공식) 접근이 전부 차단(403/429)돼 실제 확인을 못 했다 — 검색 요약으로 얻은 다수의 이적·개명 단서(T1/HLE/DK/KT/DRX/NS/KDF/BRO)는 검증 없이 코드에 반영하지 않고 `REAL_ROSTER_AUDIT.md` 검토 목록으로 남김. **실제 경기 기록 기반 능력치는 설계만 완료, 미적용**: `lib/players/rating-model.ts`(원자료/전처리/게임평가 3계층)를 신설했지만 실제 경기 원자료가 0건이라 `Player`/`Game`에 아직 연결하지 않음 — 화면엔 "게임 내 평가 — 공식 능력치 아님" 라벨만 추가. `tests/real-roster.test.mjs` 신설(6섹션), tsc/build/`management.test.mjs`/`engine.test.mjs` PASS, 브라우저에서 새 T1 커리어의 선발 5인 실명·사진·라벨 전부 확인. 아래 "REAL-01" 절 참조 |
+| REAL-01 | P2 | DONE(LCK) | 실제 로스터·사진·능력치 연결(사용자 요청, 2026-09-16 시작 → 2026-09-17 OP.GG로 재검증·능력치 실연결, D034/D035). **LCK 10팀 50명+벤치 2명**: role 키 매핑(`RosterPlayer{handle,realName,role,status,sourceUrl,confirmedAt}`)으로 재구성, Oracle's Elixir CSV + OP.GG 실측 교차검증(2026-09-17에 6개 자리 오류 발견·정정), 트라이코드 3건 정정(KRX/DNS/BFX). **실제 경기 기록 기반 능력치를 실제로 연결**: `lib/players/lck-2026-ratings.ts`(52명분 델타, z-score+표본수축)를 `newGame()`에서 합성 스탯에 가산(대체 아님, clamp) — 화면엔 "게임 내 평가 — 공식 능력치 아님" 라벨 유지. 사진은 Wikimedia Commons 10명·로고 4개(재호스팅 없음, 렌더 시점 조회). `tests/real-roster.test.mjs` 8섹션, tsc/build/`management`/`engine`(4시즌) PASS, 브라우저로 새 KT Rolster 커리어에서 정정된 ADC/SUP·능력치·트라이코드 전부 확인. **알려진 제한**: 해외팀(`INTL_ROSTER`) 미확대, Frog/Minous/Sharvel 현재 상태 미확인(로스터에서 제외), 사진은 op.gg CDN 재배포 조건 불명확으로 미적용, "최근 컨디션"(폼) 레이어는 미구현(기본 실력만 실측). 아래 "REAL-01" 절 참조 |
 | DRAFT-01 | P2 | TODO | 선택/스왑 후 선수별 정확한 보정 표시 |
 | DOC-01 | P2 | TODO | 기존 GDD·README를 현행140종/Lv4/스왑 기준으로 통합 |
 | UI-01 | P2 | TODO | 모바일 밴픽 가독성과 작은 텍스트 개선 |
@@ -400,7 +400,7 @@
 
 **F01~F27(Development Orders 전체)이 이번 세션으로 전부 한 번씩 다뤄졌다.** 완료로 표시된 항목도 각자의 "알려진 제한" 절에 남은 조각이 있으니, 다음 세션은 재구현이 아니라 그 잔여 조각(F25 첫 경기 튜토리얼 등)이나 F15급 대규모 밸런스 검증부터 사용자와 확인할 것.
 
-## REAL-01 — 실제 로스터·사진·능력치 연결 (2026-09-16) — 부분 완료, 정직하게 절반은 미착수
+## REAL-01 — 실제 로스터·사진·능력치 연결 (2026-09-16 시작, 2026-09-17 OP.GG로 재검증·능력치 실연결 — 아래 "후속" 절 먼저 읽을 것)
 
 근거: 사용자 직접 요청(Development Orders 밖 항목). 설계 결정은 `DECISIONS.md`의 **D034** 참조. 산출물: `docs/claude/REAL_ROSTER_AUDIT.md`(감사)·`docs/claude/PLAYER_RATING_MODEL.md`(능력치 모델 설계)·`docs/claude/DATA_UPDATE_GUIDE.md`(갱신 절차).
 
@@ -423,3 +423,15 @@
 - **실제 경기 기반 능력치 0% 적용** — 설계만 완료. `PLAYER_RATING_MODEL.md` §8~9가 다음에 할 일을 구체적으로 적어 뒀다.
 - **국제대회 팀(LPL/LEC/LCS/PCS) 검증은 아예 시작 안 함** — 사용자 지시대로 "LCK 먼저" 순서를 지켰다.
 - **DRX/Kwangdong Freecs/BRION의 개명 단서**(검색 요약에서만 나옴, 미검증)는 `TEAM_META`의 실제 `name`/`short`를 바꾸지 않은 채로 뒀다 — 검증 전에 표시 이름을 바꾸면 그 자체가 미확인 정보를 확정처럼 보여주는 것이라 판단.
+
+### 후속 (2026-09-17) — OP.GG 실측으로 재검증, 능력치를 실제로 연결
+
+위 "미완료" 두 절이 이번 세션에서 크게 진전됐다. 상세 diff는 `REAL_ROSTER_AUDIT.md` §9, 설계 판단은 `DECISIONS.md` **D035**.
+
+**로스터 정확성**: 2026-09-16 이후(별도 세션) Oracle's Elixir CSV로 로스터·개명(DRX→Kiwoom DRX 등)까지는 확정했었지만, 이번 세션 시작 시 감사하다가 그 CSV 매핑 스크립트가 KT Rolster ADC/SUP, Kiwoom DRX TOP/ADC/SUP, Nongshim/BNK FearX ADC 등 **6개 자리를 잘못 배정**했다는 걸 발견했다. 브라우저로 `esports.op.gg`를 직접 열어(WebFetch는 SPA라 빈 콘텐츠만 반환 — Claude-in-Chrome으로 우회) 2026 Cup Group Stage(가장 최근 완료된 LCK 대회, 2026-08-29~09-14) 데이터와 대조해 전부 정정했다. 트라이코드(DRX→KRX, KDF→DNS, FOX→BFX)도 이번에 실제로 확인해 정정 — 지난 절의 "미검증" 상태가 해소됨.
+
+**실제 경기 기록 기반 능력치**: 원자료 자체는 이미 수집돼 있었다(`lib/players/lck-2026-ratings.ts`, 별도 세션 산출물) — 이번엔 위 6자리 정정에 맞춰 재계산하고, `lib/game.ts`의 `newGame()`이 `makePlayer()`가 만든 합성 스탯 위에 이 델타를 실제로 **가산**하도록 연결했다(`rating-model.ts`의 3계층 타입 대신 더 단순한 델타 테이블 방식 — `PLAYER_RATING_MODEL.md` §8에 그 이유). "게임 내 평가 — 공식 능력치 아님" 라벨은 델타가 섞인 선수에게도 동일하게 유지된다.
+
+**검증**: `tests/real-roster.test.mjs`에 2섹션 추가(정정된 6자리를 잠그는 회귀 테스트, 델타 가산 후 클램프 범위 검증) — PASS. tsc/`npm run build`/eslint(델타 0)/`management.test.mjs`/`engine.test.mjs`(3커리어 4시즌) 전부 PASS. 브라우저로 새 KT Rolster 커리어를 생성해 ADC=Aiming·SUP=Ghost(로마자 실명 "Jang Yong-jun")가 정확히 렌더링되고, 능력치 6축·"게임 내 평가" 라벨이 정상 표시되며, 리그 순위표에 KRX/DNS/BFX 트라이코드가 올바르게 나오는 것을 직접 확인.
+
+**여전히 남은 것**: Frog·Minous·Sharvel의 현재 상태(이번 스테이지 어느 팀에도 없어 로스터에서 제외, 은퇴/2군/부상 등 확인 안 됨), 국제대회 팀 확대(LCK 검증 끝났으니 다음 차례), 사진(op.gg CDN 확인했지만 재배포 조건 불명확이라 핫링크 안 함), "최근 컨디션"(폼) 레이어(현재는 시즌 전체 표본 기반 "기본 실력"만 실측 — §5/§6이 요구한 기본실력/컨디션 분리 중 컨디션 쪽은 미구현).

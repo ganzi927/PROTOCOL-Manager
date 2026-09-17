@@ -6,6 +6,7 @@ import {CHALLENGES, startChallenge, recordObservation, successRate as challengeS
 export {CHALLENGES, startChallenge, recordObservation, challengeSuccessRate, type ChallengeId, type ChallengeProgress};
 import {CHAMPIONS, TAG_LABEL, champImageUrl, type Champion, type ChampTag, type ChampType} from './champions.ts';
 import {TEAM_META, FOREIGN_META, TEAM_LOGO, LCK_ROSTER, INTL_ROSTER, playerPhotoUrl} from './rosters.ts';
+import {lckStatDelta} from './players/lck-2026-ratings.ts';
 import {draftEffects,compositionPlan,draftFitScore} from './balance/composition.ts';
 import {narrateEvent, newNarrMemory, type Beat, type Tier} from './simulation/narration.ts';
 import {newMatchState, resolveGank, resolveBotLane, resolveObjective, resolveTeamfight, resolveSiege, type CombatEvent, type Side, type DirectorBonus} from './simulation/combat.ts';
@@ -198,14 +199,23 @@ export function newGame(teamId:string,seed:number):Game{
  if(!TEAM_META.some(t=>t.id===teamId))throw Error('팀을 선택해 주세요.');
  const rng=random(seed),players:Player[]=[],teams:Team[]=[];
  TEAM_META.forEach((m,i)=>{const lineup={} as Record<Role,string>;for(let j=0;j<7;j++){const role=ROLES[j%5];const p=makePlayer(i*7+j,role,m.id,m.base-(j>=5?17:0),1,rng);
-  // Real-name overlay only — display-only fields, never the source of engine stats/salary/mastery
-  // (see docs/claude/PLAYER_RATING_MODEL.md). j<5 = the starting five looks for a 'starter' entry;
-  // j>=5 (bench slots, always TOP/JGL role per the loop above) looks for a confirmed bench/academy
-  // entry at that same role. lib/rosters.ts currently has none tagged that way, so this is a no-op
-  // today and simply keeps the synthetic placeholder name — filling in a confirmed bench player
-  // later needs no engine change, just a new RosterPlayer entry.
+  // Real-name overlay. j<5 = the starting five looks for a 'starter' entry; j>=5 (bench
+  // slots, always TOP/JGL role per the loop above) looks for a confirmed bench/academy entry
+  // at that same role — lib/rosters.ts has no TOP/JGL bench entries yet (its two bench rows
+  // are both SUP, for KT/DNS's contested SUP slot), so the bench branch stays a no-op today.
   const rl=LCK_ROSTER[m.id]?.players.find(rp=>rp.role===role&&(j<5?rp.status==='starter':rp.status==='bench'||rp.status==='academy'));
-  if(rl){p.name=rl.handle;p.realName=rl.realName??p.realName;}
+  // rl.realName undefined ≠ "use the synthetic placeholder" — that would silently relabel a
+  // real, named person as a fabricated Korean name. Show an explicit "미확인" marker instead
+  // (same principle as the international branch below, which already avoided this).
+  if(rl){
+   p.name=rl.handle;p.realName=rl.realName??'실명 미확인';
+   // F-REAL-02: real-match-derived delta on top of the synthetic team-power stat, never a
+   // replacement — see lib/players/lck-2026-ratings.ts header for why (keeps TEAM_META's
+   // team-strength gaps intact, only nudges individual variance). Sample-size shrinkage is
+   // already baked into the stored delta, not reapplied here.
+   const delta=lckStatDelta(rl.handle);
+   if(delta)STAT_KEYS.forEach((k,i)=>{const d=delta[k as keyof typeof delta];if(d)p.stats[i]=Math.round(clamp(p.stats[i]+d,15,96)*100)/100;});
+  }
   players.push(p);if(j<5)lineup[p.role]=p.id;}const total=players.filter(p=>p.teamId===m.id).reduce((s,p)=>s+p.salary,0);if(total>240000)players.filter(p=>p.teamId===m.id).forEach(p=>p.salary=Math.floor(p.salary*240000/total));const t:Team={id:m.id,lineup,familiarity:{},cash:100000,fan:50,expected:1,tactic:i%3===0?'early':i%3===1?'late':'objective',focus:'MID',wins:0,losses:0,sw:0,sl:0,points:0};t.familiarity[key(t)]=40;teams.push(t);});
  const ranked=[...TEAM_META].sort((a,b)=>b.base-a.base);teams.forEach(t=>t.expected=ranked.findIndex(m=>m.id===t.id)+1);
  for(let i=0;i<15;i++)players.push(makePlayer(70+i,ROLES[i%5],null,48+rng()*18,1,rng));

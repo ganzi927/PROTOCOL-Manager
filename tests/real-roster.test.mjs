@@ -3,8 +3,9 @@
 // 그대로 합성 이름을 유지하는지(현재 bench/academy 확정 데이터 없음), 사진 조회가 순수 함수로
 // 동작하는지, 저장 상태(Game)에 사진 URL이 전혀 들어가지 않는지를 검증한다.
 import assert from 'node:assert/strict';
-import {newGame,upgradeGame,ROLES,TEAM_META} from '../lib/game.ts';
+import {newGame,upgradeGame,ROLES,TEAM_META,STAT_KEYS} from '../lib/game.ts';
 import {LCK_ROSTER,INTL_ROSTER,FOREIGN_META,playerPhotoUrl,TEAM_LOGO} from '../lib/rosters.ts';
+import {LCK_2026_RATINGS,lckStatDelta} from '../lib/players/lck-2026-ratings.ts';
 
 // --- 1. 국내(LCK) 선발 5인이 role별로 정확한 실명·핸들을 받는다(배열 순서가 아니라 role 매칭). ---
 {
@@ -18,7 +19,8 @@ import {LCK_ROSTER,INTL_ROSTER,FOREIGN_META,playerPhotoUrl,TEAM_LOGO} from '../l
    const actual=g.players.find(p=>p.id===startId);
    assert.ok(expected&&actual,`${m.id}/${r}: 선발과 로스터 데이터가 모두 있어야 한다`);
    assert.equal(actual.name,expected.handle,`${m.id}/${r}: 핸들이 role대로 매핑돼야 한다`);
-   assert.equal(actual.realName,expected.realName,`${m.id}/${r}: 실명이 role대로 매핑돼야 한다`);
+   assert.equal(actual.realName,expected.realName??'실명 미확인',`${m.id}/${r}: 실명이 role대로 매핑되거나, 미확인이면 그렇다고 명시돼야 한다(합성 이름으로 대체되면 안 됨)`);
+   if(expected.realName===undefined)assert.doesNotMatch(actual.realName,/^[김이박정장][가-힣]{2}$/,`${m.id}/${r}: 실명 미확인 선수가 합성 한국어 이름으로 둔갑하면 안 된다`);
    assert.equal(actual.role,r,'선수 자신의 role도 일치해야 한다');
   }
  }
@@ -80,4 +82,31 @@ import {LCK_ROSTER,INTL_ROSTER,FOREIGN_META,playerPhotoUrl,TEAM_LOGO} from '../l
  assert.equal(after,before,'upgradeGame을 다시 돌려도 이미 생성된 국내 선수의 이름은 그대로다');
 }
 
-console.log('PASS real-roster: role 기반 매핑(배열 순서 아님), 벤치 미적용, 국제팀 동일 스키마, 사진 순수 함수·저장 안 함, 기존 커리어 재적용 없음');
+// --- 7. F-REAL-02: op.gg로 검증해 바로잡은 팀 배정이 실제로 반영된다 — 2026-09-16 패스가
+//        틀렸던 자리(KT의 ADC/SUP, DRX의 Jiwoo)를 회귀 방지 고정점으로 검증한다. ---
+{
+ const g=upgradeGame(newGame('nva',5));
+ const at=(teamId,role)=>{const t=g.teams.find(x=>x.id===teamId);return g.players.find(p=>p.id===t.lineup[role])?.name;};
+ assert.equal(at('vtx','ADC'),'Aiming','KT Rolster ADC는 Aiming이어야 한다(2026-09-16 패스는 Jiwoo로 오기)');
+ assert.equal(at('vtx','SUP'),'Ghost','KT Rolster SUP은 Ghost여야 한다(2026-09-16 패스는 Effort로 오기)');
+ assert.equal(at('orl','ADC'),'Jiwoo','Kiwoom DRX ADC는 Jiwoo여야 한다');
+ assert.equal(TEAM_META.find(m=>m.id==='wlv').short,'DNS','DN SOOPers 트라이코드가 KDF에서 DNS로 정정돼야 한다');
+ assert.equal(TEAM_META.find(m=>m.id==='ark').short,'BFX','BNK FearX 트라이코드가 FOX에서 BFX로 정정돼야 한다');
+}
+
+// --- 8. F-REAL-02: 실제 경기 기록 델타(lckStatDelta)가 순수 함수로 동작하고, 선발 라인업의
+//        스탯에 실제로 가산되며, 클램프 범위를 벗어나지 않는다. ---
+{
+ assert.deepEqual(lckStatDelta('Chovy'),LCK_2026_RATINGS.Chovy.delta,'알려진 핸들은 저장된 델타를 그대로 반환');
+ assert.equal(lckStatDelta('없는선수1234'),undefined,'모르는 핸들은 undefined(지어내지 않음)');
+ const g=upgradeGame(newGame('crn',3));
+ const chovy=g.players.find(p=>p.name==='Chovy'&&p.teamId==='crn');
+ assert.ok(chovy,'Chovy가 선발 명단에 있어야 한다');
+ const visIdx=STAT_KEYS.indexOf('VIS');
+ assert.ok(chovy.stats[visIdx]>=15&&chovy.stats[visIdx]<=96,'델타 가산 후에도 스탯이 클램프 범위(15~96) 안에 있어야 한다');
+ for(const p of g.players.filter(p=>p.teamId&&LCK_ROSTER[p.teamId])){
+  assert.ok(p.stats.every(s=>Number.isFinite(s)&&s>=15&&s<=96),`${p.name}: 델타 적용 후 모든 스탯이 유효 범위여야 한다(NaN/이탈 없음)`);
+ }
+}
+
+console.log('PASS real-roster: role 기반 매핑(배열 순서 아님), 벤치 미적용, 국제팀 동일 스키마, 사진 순수 함수·저장 안 함, 기존 커리어 재적용 없음, op.gg 정정 회귀 고정, 실제 기록 델타 클램프');

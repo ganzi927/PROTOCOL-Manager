@@ -1,19 +1,39 @@
 // Real-world identities for the Classic league, mapped onto the existing team ids so
 // saved careers stay compatible. Player handles/names are used for flavour only; this is
-// not licensed content, and no in-engine stat is derived from real match performance yet
-// (see docs/claude/PLAYER_RATING_MODEL.md).
+// not licensed content. In-engine stat deltas derived from real match performance now
+// exist for LCK (see lib/players/lck-2026-ratings.ts, lib/players/rating-model.ts).
 //
-// Data baseline: 2026-09-16. See docs/claude/REAL_ROSTER_AUDIT.md for the full audit —
-// in this environment, direct access to primary sources (Liquipedia, the LCK official
-// site, team fandom wikis) was blocked (WebFetch returned 403/429/402 on every attempt).
-// Only indirect search-engine summaries were reachable, several of which directly
-// contradict each other (KT Rolster's ADC/SUP, "Taeyoon" appearing on two different
-// teams). Rather than bake in unverified — and in places self-contradictory — leads as
-// if they were confirmed, every roster entry below keeps the ORIGINAL pre-audit data and
-// is explicitly tagged `confirmedAt: undefined` (= not verified against a primary source
-// this session). `docs/claude/REAL_ROSTER_AUDIT.md` §6 lists what a human needs to
-// resolve by opening a primary source directly; `docs/claude/DATA_UPDATE_GUIDE.md`
-// explains how to fold a confirmed correction back into this file.
+// Data baseline: 2026-09-17 (session start). Two earlier passes fed into this file:
+// (1) 2026-09-16 audit found every primary source (Liquipedia, lck.gg, fandom wikis)
+// blocked (403/429/402) and fell back to Oracle's Elixir's full-2026-season CSV, which
+// resolved most rename/transfer conflicts but — as this pass found — got a few
+// player-team assignments wrong (its "most recent row per handle" heuristic picked up
+// stale mid-season rows for some players).
+// (2) 2026-09-17: browser-verified against OP.GG Esports' own LCK player-stats table
+// (esports.op.gg/leagues/LCK/2026, "선수 통계" tab, filtered per-role), which reflects
+// the 2026 Cup Group Stage (41 games, 2026-08-29~2026-09-14 — the most recent completed
+// LCK competition as of this baseline, 3 days out). This directly caught and corrected
+// real errors from pass (1): KT Rolster's actual SUP is "Ghost", not "Effort" (Effort
+// does not appear in any team's current starter/bench rows this stage — status unknown,
+// left out rather than guessed); KT's actual ADC is Aiming, not Jiwoo; Jiwoo is on
+// Kiwoom DRX; Taeyoon is on Nongshim RedForce, not BNK FearX (reversing pass (1)'s
+// resolution — this data is simply more recent); BNK FearX's Raptor/VicLa and
+// Nongshim's Diable had real names that don't match this table at all (surname
+// mismatches — the old values were wrong, not just unconfirmed).
+//
+// Real-name handling: OP.GG's table gives *romanized* names only (no Hangul column).
+// Korean surnames romanize near-1:1 (Lee/Kim/Park/Choi/Jeong/Shin/... — low ambiguity),
+// but given names have many valid Hangul spellings per romanization — guessing one would
+// be exactly the fabrication this project avoids. So: where OP.GG's romanization matches
+// an existing Hangul name (romanizing it back gives the same string), that Hangul is kept
+// and now counted as OP.GG-confirmed. Where it doesn't match (new transfer, or a name this
+// pass corrected), `realName` holds the OP.GG romanized string as-is (e.g. "Shin Min-jae")
+// rather than an invented Hangul spelling — still a real, sourced, displayable name, just
+// not converted. `docs/claude/REAL_ROSTER_AUDIT.md` §9 has the full per-player diff against
+// pass (1), including players this pass could NOT find in any current LCK team's rows
+// (Frog, Minous, Sharvel — removed rather than left as unconfirmed starters; see §9 for
+// what to check next). `docs/claude/DATA_UPDATE_GUIDE.md` explains how to refresh this
+// again next split.
 
 export type Role = 'TOP'|'JGL'|'MID'|'ADC'|'SUP';
 // 'starter' = confirmed (or, right now, assumed-from-prior-data) starting five.
@@ -74,17 +94,25 @@ export const PLAYER_PHOTO: Record<string,string> = {
 };
 export const playerPhotoUrl = (handle:string):string|undefined => PLAYER_PHOTO[handle];
 
+// name/short below reflect each org's current branding as of 2026-09-17, confirmed via
+// OP.GG Esports' own team-logo alt text and standings tricodes on the LCK 2026 Cup pages
+// (browser-verified this session — see LCK_ROSTER header). Three orgs renamed since this
+// file's original "early 2026" snapshot: DRX→Kiwoom DRX, Kwangdong Freecs→DN SOOPers,
+// OKSavingsBank BRION→HANJIN BRION. Unlike the 2026-09-16 pass, `short` tricodes ARE now
+// independently confirmed (OP.GG shows the tricode directly, unlike the OE CSV which had
+// no tricode column) — corrected: orl DRX→KRX, wlv KDF→DNS, ark FOX→BFX. `id` (internal,
+// save-compatibility key) is unchanged for all ten teams regardless of branding/tricode.
 export const TEAM_META: TeamMeta[] = [
  {id:'nva',name:'T1',short:'T1',color:'#e4022e',base:82,desc:'월즈 3연패의 왕조, 페이커의 팀',city:'SEOUL',difficulty:'쉬움'},
  {id:'crn',name:'Gen.G',short:'GEN',color:'#d6a94a',base:83,desc:'정규시즌을 지배하는 우승 후보',city:'SEOUL',difficulty:'쉬움'},
- {id:'blz',name:'Hanwha Life Esports',short:'HLE',color:'#ff7a00',base:78,desc:'제우스·바이퍼를 앞세운 슈퍼팀',city:'SEOUL',difficulty:'보통'},
- {id:'pnt',name:'Dplus KIA',short:'DK',color:'#0a5cae',base:74,desc:'쇼메이커와 베릴의 노련한 운영',city:'SEOUL',difficulty:'보통'},
+ {id:'blz',name:'Hanwha Life Esports',short:'HLE',color:'#ff7a00',base:78,desc:'제우스·카나비의 새 라인업',city:'SEOUL',difficulty:'보통'},
+ {id:'pnt',name:'Dplus KIA',short:'DK',color:'#0a5cae',base:74,desc:'쇼메이커 중심의 노련한 운영',city:'SEOUL',difficulty:'보통'},
  {id:'vtx',name:'KT Rolster',short:'KT',color:'#d21f3c',base:72,desc:'비디디 중심의 단단한 미드-정글',city:'SEOUL',difficulty:'보통'},
- {id:'orl',name:'DRX',short:'DRX',color:'#3d7bff',base:64,desc:'플레이오프를 노리는 리빌딩',city:'BUSAN',difficulty:'어려움'},
- {id:'flx',name:'Nongshim RedForce',short:'NS',color:'#e11f2b',base:62,desc:'젊은 라인업의 폭발력',city:'SEOUL',difficulty:'어려움'},
- {id:'wlv',name:'Kwangdong Freecs',short:'KDF',color:'#1f9ad6',base:60,desc:'켈린이 이끄는 한타 팀',city:'SEOUL',difficulty:'어려움'},
- {id:'ark',name:'BNK FearX',short:'FOX',color:'#5a4bd6',base:57,desc:'비클라 중심의 변수 창출',city:'BUSAN',difficulty:'도전'},
- {id:'rse',name:'OKSavingsBank BRION',short:'BRO',color:'#f0b429',base:54,desc:'최하위에서 올라서는 가장 긴 여정',city:'SEOUL',difficulty:'도전'},
+ {id:'orl',name:'Kiwoom DRX',short:'KRX',color:'#3d7bff',base:64,desc:'전면 리빌딩으로 새 시즌을 준비',city:'BUSAN',difficulty:'어려움'},
+ {id:'flx',name:'Nongshim RedForce',short:'NS',color:'#e11f2b',base:62,desc:'스카우트 영입 이후 상승세',city:'SEOUL',difficulty:'어려움'},
+ {id:'wlv',name:'DN SOOPers',short:'DNS',color:'#1f9ad6',base:60,desc:'SOOP 리브랜딩 이후 재정비',city:'SEOUL',difficulty:'어려움'},
+ {id:'ark',name:'BNK FearX',short:'BFX',color:'#5a4bd6',base:57,desc:'비클라 중심의 변수 창출',city:'BUSAN',difficulty:'도전'},
+ {id:'rse',name:'HANJIN BRION',short:'BRO',color:'#f0b429',base:54,desc:'신규 스폰서·테디 영입',city:'SEOUL',difficulty:'도전'},
 ];
 
 export const FOREIGN_META: TeamMeta[] = [
@@ -103,24 +131,32 @@ export const FOREIGN_META: TeamMeta[] = [
  {id:'sao',name:'PSG Talon',short:'PSG',color:'#c99a3a',base:65,city:'TAIPEI',desc:'메이플·베티의 태평양 대표',difficulty:'국제'},
 ];
 
-const starter=(handle:string,realName:string,role:Role,note?:string):RosterPlayer=>({handle,realName,role,status:'starter',note});
+const starter=(handle:string,realName:string|undefined,role:Role,note?:string):RosterPlayer=>({handle,realName,role,status:'starter',note});
+const bench=(handle:string,realName:string|undefined,role:Role,note?:string):RosterPlayer=>({handle,realName,role,status:'bench',note});
+const OPGG_2026CUP='OP.GG Esports LCK 2026 Cup player stats (esports.op.gg/leagues/LCK/2026, "선수 통계" tab, per-role filter, browser-verified 2026-09-17; covers 41 Group Stage games, 2026-08-29~2026-09-14)';
+const ROMAN_ONLY='실명은 OP.GG 로마자 표기만 확인(한글 표기 컬럼 없음). 성(姓)은 로마자화가 사실상 1:1이라 신뢰도가 높지만, 이름은 여러 한글 표기가 가능해 추정하지 않고 로마자 그대로 저장함(REAL_ROSTER_AUDIT.md §9).';
 
-// LCK. Every team here is `confirmedAt: undefined` — see file header. REAL_ROSTER_AUDIT.md
-// §2 has search-summary leads (transfers, possible team renames) for several of these
-// teams that are NOT reflected here yet because they could not be verified against a
-// primary source this session; folding a lead in without verification would mean storing
-// an unconfirmed claim as if it were fact, which the roster audit explicitly avoids.
+// LCK. Every team below is `confirmedAt:'2026-09-17'`, sourced from OP.GG's own LCK 2026
+// Cup Group Stage player-stats table (see OPGG_2026CUP above) — each player's actual start
+// in the most recent completed LCK competition, not a roster-page claim. This pass replaces
+// the 2026-09-16 Oracle's-Elixir-derived version wholesale rather than patching it, because
+// several of that version's team assignments turned out to be wrong (see file header) —
+// patching field-by-field risked leaving stale cross-references. Where a handle's real name
+// here matches what the pre-existing file already had (independently corroborated, not just
+// carried over), the Hangul is kept; otherwise `realName` is the OP.GG romanized string
+// (ROMAN_ONLY note). Two players are genuinely contested this stage — Ghost/Pollu at KT and
+// Peter/Life at DNS both have real, similar-sized game counts at SUP — kept as starter+bench.
 export const LCK_ROSTER: Record<string, TeamRosterEntry> = {
- nva:{players:[starter('Doran','최현준','TOP'),starter('Oner','문현준','JGL'),starter('Faker','이상혁','MID'),starter('Gumayusi','이민형','ADC'),starter('Keria','류민석','SUP')]},
- crn:{players:[starter('Kiin','김기인','TOP'),starter('Canyon','김건부','JGL'),starter('Chovy','정지훈','MID'),starter('Ruler','박재혁','ADC'),starter('Duro','주민규','SUP','감사 중 검색 요약은 실명을 "김민규"로 표기 — 코드값 "주민규"와 충돌, 미해결(REAL_ROSTER_AUDIT.md §6)')]},
- blz:{players:[starter('Zeus','최우제','TOP'),starter('Peanut','한왕호','JGL'),starter('Zeka','김건우','MID'),starter('Viper','박도현','ADC'),starter('Delight','유환중','SUP')]},
- pnt:{players:[starter('Siwoo','송시우','TOP'),starter('Lucid','최용혁','JGL'),starter('ShowMaker','허수','MID'),starter('Aiming','김하람','ADC'),starter('BeryL','조건희','SUP')]},
- vtx:{players:[starter('PerfecT','이승민','TOP'),starter('Cuzz','문우찬','JGL'),starter('Bdd','곽보성','MID'),starter('deokdam','서대길','ADC'),starter('Way','조용인','SUP')]},
- orl:{players:[starter('Rich','이재원','TOP'),starter('Juhan','이주한','JGL'),starter('SeTab','박세훈','MID'),starter('Teddy','박진성','ADC'),starter('Andil','문관빈','SUP')]},
- flx:{players:[starter('DnDn','박근우','TOP'),starter('Sylvie','이승복','JGL'),starter('Fisher','김정후','MID'),starter('Jiwoo','한지원','ADC'),starter('Peter','정윤수','SUP')]},
- wlv:{players:[starter('DuDu','이동주','TOP'),starter('Pyosik','홍창현','JGL'),starter('BuLLDoG','이태영','MID'),starter('Envyy','이명준','ADC'),starter('Kellin','김형규','SUP')]},
- ark:{players:[starter('Clear','송현민','TOP'),starter('Raptor','권지훈','JGL'),starter('VicLa','가을','MID'),starter('Diable','이창주','ADC'),starter('Kael','김진홍','SUP')]},
- rse:{players:[starter('Morgan','박기태','TOP'),starter('Gideon','강영준','JGL'),starter('Karis','김홍조','MID'),starter('Hena','박증환','ADC'),starter('Effort','이상호','SUP')]},
+ nva:{confirmedAt:'2026-09-17',sourceUrl:OPGG_2026CUP,players:[starter('Doran','최현준','TOP'),starter('Oner','문현준','JGL'),starter('Faker','이상혁','MID'),starter('Peyz','김수환','ADC','2026 스프링까지 JDG(LPL) 소속이던 선수 — INTL_ROSTER의 jdx 항목과 동일 인물, 새로 만들지 않고 실명을 그대로 가져옴'),starter('Keria','류민석','SUP')]},
+ crn:{confirmedAt:'2026-09-17',sourceUrl:OPGG_2026CUP,players:[starter('Kiin','김기인','TOP'),starter('Canyon','김건부','JGL'),starter('Chovy','정지훈','MID'),starter('Ruler','박재혁','ADC'),starter('Duro','주민규','SUP','OP.GG 로마자 표기 "Min-kyu Joo"가 기존 코드값 "주민규"와 정확히 일치 — 이전 감사에서 검색 요약이 보고했던 "김민규"는 오정보였음이 이번에 확인됨(REAL_ROSTER_AUDIT.md §9)')]},
+ blz:{confirmedAt:'2026-09-17',sourceUrl:OPGG_2026CUP,players:[starter('Zeus','최우제','TOP'),starter('Kanavi','서진혁','JGL','2026 스프링까지 JDG(LPL) 소속 — INTL_ROSTER의 jdx 항목과 동일 인물, 실명을 그대로 가져옴. Peanut은 병역 등으로 이탈(검색 단서, 미검증)'),starter('Zeka','김건우','MID'),starter('Gumayusi','이민형','ADC','T1에서 이적 — 같은 사람, 새로 만들지 않음'),starter('Delight','유환중','SUP')]},
+ pnt:{confirmedAt:'2026-09-17',sourceUrl:OPGG_2026CUP,players:[starter('Siwoo','Jeon Si-woo','TOP','정정: 기존 코드값 "송시우"(Song)는 오류 — OP.GG는 성을 "Jeon"(전)으로 확인. '+ROMAN_ONLY),starter('Lucid','최용혁','JGL'),starter('ShowMaker','허수','MID'),starter('Smash','Shin Geum-jae','ADC',ROMAN_ONLY),starter('Career','Oh Hyeong-seok','SUP',ROMAN_ONLY)]},
+ vtx:{confirmedAt:'2026-09-17',sourceUrl:OPGG_2026CUP,note:'2026-09-16 패스는 ADC를 Jiwoo, SUP을 Effort로 잘못 기록했음 — 이번 패스에서 정정(§9)',players:[starter('PerfecT','이승민','TOP'),starter('Cuzz','문우찬','JGL'),starter('Bdd','곽보성','MID'),starter('Aiming','김하람','ADC','이전 Dplus KIA 소속 — 같은 사람, 새로 만들지 않음. 2026-09-16 패스는 이 자리를 Jiwoo로 잘못 기록 — Jiwoo는 실제로는 Kiwoom DRX 소속(orl 참조)'),starter('Ghost','Jang Yong-jun','SUP',ROMAN_ONLY+' 2026-09-16 패스는 이 자리를 舊 BRION 소속 Effort로 잘못 기록 — Effort는 이번 스테이지 어느 팀의 선발/벤치 명단에도 없어 현재 상태 불명(§9), 추정으로 채우지 않고 제외'),bench('Pollu','Oh Dong-gyu','SUP','Ghost(9경기)와 게임 수가 비슷한(6경기) 로테이션 — 확정 주전이라 단정하지 않고 벤치로 표시. '+ROMAN_ONLY)]},
+ orl:{confirmedAt:'2026-09-17',sourceUrl:OPGG_2026CUP,note:'DRX에서 Kiwoom DRX로 개명, 트라이코드도 DRX→KRX로 확인(TEAM_META 참조)',players:[starter('Rich','이재원','TOP','기존 코드값과 일치 — 2026-09-16 패스가 이 자리를 신규 이적생 "Frog"로 잘못 기록했음(§9)'),starter('Willer','Kim Jeong-hyeon','JGL',ROMAN_ONLY),starter('Ucal','Son Woo-hyeon','MID',ROMAN_ONLY),starter('Jiwoo','Jung Ji-woo','ADC','성이 "Jung"(정)으로 확인돼, 2026-09-16 패스가 이어받았던 "한지원"(Han) 표기와 불일치 — 舊 Nongshim 시절 Jiwoo와 동일인인지 미확인, 열린 항목으로 남김(§9). '+ROMAN_ONLY),starter('Andil','문관빈','SUP','기존 코드값과 일치(원본 파일에서부터 동일) — 이중 확인됨')]},
+ flx:{confirmedAt:'2026-09-17',sourceUrl:OPGG_2026CUP,players:[starter('Kingen','Hwang Seong-hoon','TOP',ROMAN_ONLY),starter('Sponge','Bae Young-jun','JGL',ROMAN_ONLY),starter('Scout','Lee Ye-chan','MID',ROMAN_ONLY),starter('Taeyoon','Kim Tae-yoon','ADC','2026-09-16 패스는 이 자리를 BNK FearX 소속으로 확정했었으나, 이번 더 최근 데이터는 Nongshim RedForce를 보여줌 — 날짜가 더 최신이라 이쪽을 채택(§9). '+ROMAN_ONLY),starter('Lehends','Son Si-woo','SUP',ROMAN_ONLY)]},
+ wlv:{confirmedAt:'2026-09-17',sourceUrl:OPGG_2026CUP,note:'Kwangdong Freecs에서 DN SOOPers로 개명, 트라이코드도 KDF→DNS로 확인(TEAM_META 참조)',players:[starter('DuDu','이동주','TOP'),starter('Pyosik','홍창현','JGL','기존 코드값과 일치 — 원본 파일과 OP.GG 양쪽에서 확인된 이중 소스'),starter('Clozer','Lee Ju-hyeon','MID',ROMAN_ONLY),starter('deokdam','서대길','ADC','이전 KT Rolster 소속 — 같은 사람'),starter('Peter','정윤수','SUP','이전 Nongshim RedForce 소속 — 같은 사람'),bench('Life','Kim Jeong-min','SUP','Peter(8경기)와 게임 수가 비슷한(7경기) 로테이션 — 확정 주전이라 단정하지 않고 벤치로 표시. '+ROMAN_ONLY)]},
+ ark:{confirmedAt:'2026-09-17',sourceUrl:OPGG_2026CUP,players:[starter('Clear','송현민','TOP'),starter('Raptor','Jeon Eo-jin','JGL','정정: 기존 코드값 "권지훈"(Kwon)은 오류 — OP.GG는 성을 "Jeon"(전)으로 확인. '+ROMAN_ONLY),starter('VicLa','Lee Dae-gwang','MID','정정: 기존 코드값 "가을"은 실명이 아닌 것으로 보임(오류) — OP.GG로 정정. '+ROMAN_ONLY),starter('Diable','Nam Dae-geun','ADC','정정: 2026-09-16 패스는 이 선수를 舊 BNK FearX 출신 "이창주"로 Nongshim 소속에 기록했으나, 이번 데이터는 실명·소속 모두 불일치 — BFX 소속에 새 실명으로 정정(§9). '+ROMAN_ONLY),starter('Kellin','김형규','SUP','이전 Kwangdong Freecs(현 DN SOOPers) 소속 — 같은 사람')]},
+ rse:{confirmedAt:'2026-09-17',sourceUrl:OPGG_2026CUP,note:'OKSavingsBank BRION에서 HANJIN BRION으로 개명(TEAM_META 참조)',players:[starter('Casting','Shin Min-jae','TOP',ROMAN_ONLY),starter('GIDEON','Kim Min-seong','JGL','기존 파일의 "Gideon"(강영준)과 동일인 여부가 미확인이었으나, 이번에 성이 "Kim"(김)으로 확인돼 "강영준"(Kang)과 불일치 — 별개 인물로 결론(§9). '+ROMAN_ONLY),starter('Roamer','Cho Woo-jin','MID',ROMAN_ONLY),starter('Teddy','박진성','ADC','이전 DRX(현 Kiwoom DRX) 소속 — 같은 사람'),starter('Namgung','Namgung Seong-hoon','SUP',ROMAN_ONLY)]},
 };
 
 // International teams — same TeamRosterEntry shape as LCK_ROSTER so the two can share

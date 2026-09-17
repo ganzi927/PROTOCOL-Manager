@@ -22,15 +22,17 @@
 
 ## 평가 모델(실제 경기 기반 능력치) 갱신
 
-아직 실제 데이터가 하나도 연결되지 않은 상태(`docs/claude/PLAYER_RATING_MODEL.md` §0)이므로, 이 절차는 **처음 실제 데이터를 연결할 때**를 위한 것이다:
+LCK는 2026-09-16/17에 처음 실제 데이터가 연결됐다 — `lib/players/lck-2026-ratings.ts`(팀·역할별 델타)가 `lib/game.ts`의 `newGame()`에서 `makePlayer()`가 만든 합성 스탯 위에 가산된다(대체 아님). 다음 시즌/스플릿에 다시 계산할 때 절차:
 
-1. `lib/players/rating-model.ts`의 `RawMatchObservation[]`을 실제 경기별 기록으로 채운다. 각 항목에 `sourceUrl`이 필수 — 이 URL을 실제로 열어 그 경기 기록을 봤다는 뜻이어야 한다.
-2. 표본이 선수당 최소 10경기(낮은 신뢰도) 이상 모일 때까지는 `confidenceForSample()`이 자동으로 `low` 이하로 표시한다 — 이 등급을 임의로 올리지 않는다.
-3. `THRESH_FULL_SAMPLE`(현재 40, 미검증)을 실제 표본 분포로 재측정한다 — F27이 `MIN_SAMPLE=6`을 실측(3시즌 scratch 시뮬레이션)으로 정한 것과 같은 방식(감으로 정하지 않기).
-4. `BASELINE_BY_ROLE`을 역할별 실제 리그 평균으로 나눠 넣는다(지금은 5개 역할 전부 65로 동일).
-5. `GameRating`을 만들고 나서, 기존 `makePlayer()` 경로를 대체하기 전에 **대표 선수 표본(포지션별 2~3명)으로 먼저 검증**한다 — `PLAYER_RATING_MODEL.md` §9의 검증 절차(같은 조합·시드에서 선수만 교체 비교, 숨은 승률 보너스 금지, 약팀도 승산 있는지 확인)를 그대로 따른다.
-6. 전체 적용 전에 F15가 쓴 McNemar 페어 CI 방법론(`tests/teamfight-review.mjs`)으로 실제 승률 이동폭을 측정해 "지배적 레버"가 되지 않는지 확인한다.
-7. 적용은 F27과 같은 이유로 **새 커리어 생성 시점에만** — 진행 중인 커리어의 선수 성장·능력치를 실제 데이터로 소급 덮어쓰지 않는다.
+1. **원자료 확보**: Oracle's Elixir의 해당 시즌 CSV를 구한다(2026 시즌은 `SahilAshar/lol-meta-tracker` GitHub 레포에 하드코딩된 연도별 구글 드라이브 파일 ID로 찾았다 — 매년 파일 ID가 바뀔 수 있으니 다시 검색). WebFetch는 응답 크기 제한(10MB)에 걸려 실패하므로 `curl -L "https://drive.usercontent.google.com/download?id=<FILE_ID>&export=download&confirm=t"`로 직접 받는다. CSV는 70MB급이라 저장소에 커밋하지 않고 임시 경로에만 둔다.
+2. **핸들→팀/역할 매핑을 먼저 확정**한다 — `lib/rosters.ts`의 `LCK_ROSTER`를 그대로 옮겨 적는다(추측 금지). 이 매핑이 틀리면 계산 자체는 성공하지만 엉뚱한 선수에게 델타가 붙는다 — 2026-09-16 패스가 겪은 실수(§9 참조)가 정확히 이 케이스였다.
+3. **역할별 기준선**은 매핑과 무관하게 CSV 전체(`league==='LCK'`)에서 역할별 평균·표준편차로 구한다(선수 개인 매핑이 틀려도 이 기준선 자체는 영향받지 않는다).
+4. **축 매핑**(`PLAYER_RATING_MODEL.md` §3): LNE=`golddiffat10`, TF=킬관여율(`(kills+assists)/teamkills`), VIS=`vspm`, CAR=`damageshare`. OBJ·MEC은 이 CSV에 대응 지표가 없어 비워 둔다(대리 지표로 채우지 않는다).
+5. **z-score + 표본 수축**: 선수 평균을 역할 기준선 대비 z-score로 만들고 ±2.5로 clamp, `min(1, games/40)`을 곱해 표본이 적을수록 0에 가깝게 당긴 뒤 ×4(최대 ±10점). 계산 스크립트는 재현용으로 한 번 쓰고 지운다 — 이 문서의 위 4단계가 그 스크립트의 전체 로직이다.
+6. **op.gg로 교차 검증**: `esports.op.gg/leagues/LCK/<시즌>`의 "선수 통계" 탭(브라우저로 열어야 함 — SPA라 WebFetch는 빈 콘텐츠만 반환)에서 최근 스테이지의 팀·포지션·로마자 실명을 확인해 2단계의 매핑과 대조한다. 불일치가 나오면(이적·개명·오기) 더 최근 데이터 쪽을 채택하고 `lib/rosters.ts`에 그 근거를 남긴다.
+7. `confidenceForSample()`/`THRESH_FULL_SAMPLE`(현재 40, 위 5단계와 동일 값) — 표본이 선수당 10경기 미만이면 `low`, 40경기 이상이면 `high`로 자동 분류된다. 이 등급을 임의로 올리지 않는다.
+8. 전체 적용 전에 대표 선수 표본으로 `tests/real-roster.test.mjs`의 델타 클램프 검증을 통과시키고, 필요하면 F15가 쓴 McNemar 페어 CI 방법론(`tests/teamfight-review.mjs`)으로 실제 승률 이동폭을 측정해 "지배적 레버"가 되지 않는지 확인한다.
+9. 적용은 F27과 같은 이유로 **새 커리어 생성 시점에만** — 진행 중인 커리어의 선수 성장·능력치를 실제 데이터로 소급 덮어쓰지 않는다.
 
 ## 국제대회 팀 확대
 
